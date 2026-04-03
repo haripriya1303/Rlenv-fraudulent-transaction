@@ -1,0 +1,85 @@
+name: openenv-fraud
+version: "1.0.0"
+description: >
+  Fraud Detection & Transaction Risk Review RL Environment.
+  An AI agent sequentially reviews banking transactions and must decide
+  APPROVE, FLAG, or BLOCK — balancing fraud prevention against
+  false-positive customer experience costs.
+
+entry_point: "server.app:app"
+
+observation_type: FraudObservation
+action_type: FraudAction
+reward_type: float
+
+max_steps: 50
+
+tags:
+  - fintech
+  - fraud-detection
+  - reinforcement-learning
+  - sequential-decision-making
+  - openenv
+
+tasks:
+  easy:
+    name: easy_fraud_detection
+    description: >
+      Detect obvious fraudulent transactions with single high-confidence signals
+      (e.g. crypto purchase at 3am from a sanctioned country, or 15× amount spike
+      with a brand new device). 20-step episode. ~40% fraud rate.
+    max_steps: 20
+    fraud_rate: 0.40
+    difficulty: easy
+    grader: accuracy_based
+    seed: 1001
+
+  medium:
+    name: medium_fraud_detection
+    description: >
+      Multi-feature reasoning required. No single signal is conclusive.
+      Agent must weigh geo risk, merchant type, velocity, device consistency,
+      and amount anomaly simultaneously. 30-step episode, ~40% fraud rate,
+      with ambiguous mixed-signal cases.
+    max_steps: 30
+    fraud_rate: 0.40
+    difficulty: medium
+    grader: partial_credit
+    seed: 2002
+
+  hard:
+    name: hard_fraud_detection
+    description: >
+      Long-horizon reward optimization over 50 steps. Fraud patterns are
+      subtle and adversarial. Over-blocking incurs cascade penalties. Agent
+      must calibrate decisions to maximize cumulative reward over the full
+      episode. Graded by normalized cumulative reward [0, 1].
+    max_steps: 50
+    fraud_rate: 0.35
+    difficulty: hard
+    grader: normalized_cumulative_reward
+    seed: 3003
+
+reward_structure:
+  correct_block:    +1.00
+  partial_flag_fraud: +0.50
+  correct_approve:  +0.50
+  miss_fraud:       -1.00
+  false_block:      -0.70
+  false_flag:       -0.30
+  over_block_penalty: -0.15  # Applied when block_rate > 35%
+
+docker:
+  image: openenv-fraud:latest
+  port: 8000
+  env_vars:
+    - FRAUD_TASK: "medium"
+    - LOG_DIR: "/app/outputs/logs"
+
+huggingface:
+  space: openenv/fraud-detection-env
+  sdk: docker
+  tags:
+    - openenv
+    - fraud-detection
+    - reinforcement-learning

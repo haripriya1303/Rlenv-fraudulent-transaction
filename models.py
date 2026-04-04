@@ -4,7 +4,7 @@ All data structures shared between client and server.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from pydantic import Field
 from typing import Dict, List, Literal, Optional
 import uuid
 
@@ -14,8 +14,6 @@ from openenv.core.env_server import Action, Observation, State
 # ---------------------------------------------------------------------------
 # Action
 # ---------------------------------------------------------------------------
-
-@dataclass
 class FraudAction(Action):
     """
     Agent action: classify a transaction as APPROVE, FLAG, or BLOCK.
@@ -39,8 +37,6 @@ class FraudAction(Action):
 # ---------------------------------------------------------------------------
 # Observation
 # ---------------------------------------------------------------------------
-
-@dataclass
 class FraudObservation(Observation):
     """
     Full observable state presented to the agent per transaction step.
@@ -103,8 +99,6 @@ class FraudObservation(Observation):
 # ---------------------------------------------------------------------------
 # State
 # ---------------------------------------------------------------------------
-
-@dataclass
 class FraudState(State):
     """
     Full internal episode state – includes ground truth labels for logging
@@ -113,7 +107,7 @@ class FraudState(State):
     # Inherited: episode_id, step_count
 
     # Episode log: list of dicts, one per step
-    episode_log: List[Dict] = field(default_factory=list)
+    episode_log: List[Dict] = Field(default_factory=list)
 
     # Running counters
     total_reward: float = 0.0

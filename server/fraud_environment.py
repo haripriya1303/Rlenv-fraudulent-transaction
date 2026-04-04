@@ -10,7 +10,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from openenv.core.env_server import Environment
 
-from ..models import FraudAction, FraudObservation, FraudState
+from models import FraudAction, FraudObservation ,FraudState
 from .episode_logger import EpisodeLogger
 from .graders import grade_episode
 from .reward_engine import RewardEngine

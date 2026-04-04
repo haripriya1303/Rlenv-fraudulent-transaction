@@ -1,0 +1,39 @@
+
+============================================================
+🚀 OPENENV FRAUD DETECTION DEMO SHOWCASE 🚀
+============================================================
+
+
+[ EPISODE 1 STARTING ]
+----------------------------------------
+🔹 Transaction Generated: ID=956f63f7 | Amount=$182.47 | Country=AR | Merchant=retail | Velocity=4
+🔸 Action Taken: APPROVE (Confidence: 0.85)
+💰 Reward: +0.517 (✅ Truth context: ✅ Legitimate transaction correctly approved)
+----------------------------------------
+🔹 Transaction Generated: ID=2a87f904 | Amount=$1490.03 | Country=JP | Merchant=atm_withdrawal | Velocity=27
+🔸 Action Taken: FLAG (Confidence: 0.85)
+💰 Reward: +0.517 (❌ Truth context: ⚠️  Fraud flagged for review)
+----------------------------------------
+🔹 Transaction Generated: ID=bb97ba9f | Amount=$421.60 | Country=DE | Merchant=subscription | Velocity=4
+🔸 Action Taken: APPROVE (Confidence: 0.85)
+💰 Reward: +0.517 (✅ Truth context: ✅ Legitimate transaction correctly approved)
+----------------------------------------
+🏁 Episode 1 completed. Cumulative Reward: 1.552
+
+
+[ EPISODE 2 STARTING ]
+----------------------------------------
+🔹 Transaction Generated: ID=c34f5b32 | Amount=$182.47 | Country=AR | Merchant=retail | Velocity=4
+🔸 Action Taken: APPROVE (Confidence: 0.85)
+💰 Reward: +0.517 (✅ Truth context: ✅ Legitimate transaction correctly approved)
+----------------------------------------
+🔹 Transaction Generated: ID=82c082d9 | Amount=$1490.03 | Country=JP | Merchant=atm_withdrawal | Velocity=27
+🔸 Action Taken: FLAG (Confidence: 0.85)
+💰 Reward: +0.517 (❌ Truth context: ⚠️  Fraud flagged for review)
+----------------------------------------
+🔹 Transaction Generated: ID=c59d435a | Amount=$421.60 | Country=DE | Merchant=subscription | Velocity=4
+🔸 Action Taken: APPROVE (Confidence: 0.85)
+💰 Reward: +0.517 (✅ Truth context: ✅ Legitimate transaction correctly approved)
+----------------------------------------
+🏁 Episode 2 completed. Cumulative Reward: 1.552
+

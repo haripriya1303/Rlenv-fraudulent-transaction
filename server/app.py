@@ -9,15 +9,17 @@ import os
 from fastapi import FastAPI
 from openenv.core.env_server import create_fastapi_app
 
-from ..models import FraudAction, FraudObservation
+from models import FraudAction, FraudObservation
 from .fraud_environment import FraudEnvironment
 
 # Task is configurable via environment variable (defaults to "medium")
 TASK = os.environ.get("FRAUD_TASK", "medium")
-
+env_factory = lambda: FraudEnvironment(task=TASK)
+# To preserve the on-demand graded endpoints, we can instantiate one for the app object 
+# OR just use the factory for Fastapi. Let's see if env is used below.
 env = FraudEnvironment(task=TASK)
-app: FastAPI = create_fastapi_app(env, FraudAction, FraudObservation)
-
+app: FastAPI = create_fastapi_app(lambda: FraudEnvironment(task=TASK), FraudAction, FraudObservation)
+app.state.env = env # Just to preserve backwards compatibility for info endpoints
 
 # ---------------------------------------------------------------------------
 # Extra health + metadata endpoints

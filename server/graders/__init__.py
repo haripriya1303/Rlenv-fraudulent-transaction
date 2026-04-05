@@ -169,76 +169,40 @@ class MediumGrader(BaseGrader):
 
 class HardGrader(BaseGrader):
     """
-    Long-horizon optimization grader.
-
-    Normalizes the agent's cumulative reward against theoretical bounds:
-      max_possible_reward = n * 1.0  (all correct BLOCKs + correct APPROVEs)
-      min_reward          = n * -1.5 (all fraud missed + over-blocking penalty)
-
-    score = (cumulative - min) / (max - min) clamped to [0, 1]
-
-    Also checks:
-      - Block rate is reasonable (≤ 60%)
-      - Fraud catch rate ≥ 30% (avoid trivially approving everything)
+    HARD: Strategic Utility Maximization.
+    Scores based on Cumulative Net-Utility vs Theoretical Perfect.
+    Penalizes both missed fraud AND over-conservatism.
     """
-
-    MAX_STEP_REWARD = 1.00
-    MIN_STEP_REWARD = -1.50     # approving fraud + over-block cascade
+    MAX_CUM_UTILITY = 1.0 
 
     def grade(self, steps: List[Dict[str, Any]]) -> Dict[str, Any]:
         if not steps:
-            return {"score": 0.0, "breakdown": {}, "details": "No steps logged"}
+            return {"score": 0.0, "details": "Empty episode"}
 
         n = len(steps)
-        cumulative_reward = sum(s["step_reward"] for s in steps)
+        total_utility = sum(s["step_reward"] for s in steps)
+        
+        # Max possible utility if we got every tag correct (approx 1.2 per step)
+        perfect_utility = n * 1.5
+        score = total_utility / perfect_utility
+        score = round(max(0.0, min(1.0, score)), 4)
 
-        max_possible = n * self.MAX_STEP_REWARD
-        min_possible = n * self.MIN_STEP_REWARD
-        denom = max_possible - min_possible
-
-        normalized = (cumulative_reward - min_possible) / denom if denom > 0 else 0.0
-        normalized = max(0.0, min(1.0, normalized))
-
-        # Sanity checks
         fraud_steps = [s for s in steps if s["is_fraud"]]
-        fraud_caught = sum(
-            1 for s in fraud_steps
-            if s["agent_action"] in ("BLOCK", "FLAG")
-        )
-        catch_rate = fraud_caught / len(fraud_steps) if fraud_steps else 0.0
-
-        block_count = sum(1 for s in steps if s["agent_action"] == "BLOCK")
-        block_rate  = block_count / n
-
-        # Penalty: agent that approves everything to avoid penalties
-        if catch_rate < 0.20 and len(fraud_steps) >= 5:
-            normalized *= 0.50   # severe penalty for ignoring fraud entirely
-
-        # Penalty: agent that blocks everything
-        if block_rate > 0.75:
-            normalized *= 0.70
-
-        final_score = round(min(1.0, max(0.0, normalized)), 4)
+        catch_rate = sum(1 for s in fraud_steps if s["agent_action"] in ("BLOCK", "FLAG")) / len(fraud_steps)
+        
+        # Critical failure: if catch rate is < 30%, score is zeroed (unacceptable bank risk)
+        if catch_rate < 0.30:
+            score = 0.0
 
         return {
-            "score": final_score,
-            "grader": "hard_normalized_reward",
+            "score": score,
+            "grader": "hard_utility_regime",
             "breakdown": {
-                "total_steps":          n,
-                "cumulative_reward":    round(cumulative_reward, 4),
-                "max_possible_reward":  max_possible,
-                "min_possible_reward":  min_possible,
-                "raw_normalized":       round(normalized, 4),
-                "fraud_catch_rate":     round(catch_rate, 4),
-                "block_rate":           round(block_rate, 4),
-                "final_score":          final_score,
+                "utility": total_utility,
+                "fraud_catch_rate": catch_rate,
+                "perfect_baseline": perfect_utility,
             },
-            "details": (
-                f"Score={final_score:.4f} | "
-                f"CumReward={cumulative_reward:.3f} "
-                f"[min={min_possible:.1f}, max={max_possible:.1f}] | "
-                f"FraudCatch={catch_rate:.1%} BlockRate={block_rate:.1%}"
-            ),
+            "details": f"Utility Score: {score:.4f} | Fraud Caught: {catch_rate:.1%}"
         }
 
 

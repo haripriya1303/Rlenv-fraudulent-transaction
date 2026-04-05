@@ -7,9 +7,10 @@ from __future__ import annotations
 from dataclasses import asdict
 from typing import Optional
 
-from openenv.core import EnvClient, StepResult
+from openenv.core import EnvClient
+from openenv.core.client_types import StepResult
 
-from .models import FraudAction, FraudObservation, FraudState
+from models import FraudAction, FraudObservation, FraudState
 
 
 class FraudEnv(EnvClient[FraudAction, FraudObservation, FraudState]):
@@ -41,7 +42,6 @@ class FraudEnv(EnvClient[FraudAction, FraudObservation, FraudState]):
             observation=obs,
             reward=payload.get("reward", 0.0),
             done=payload.get("done", False),
-            info=payload.get("info", {}),
         )
 
     def _parse_state(self, payload: dict) -> FraudState:

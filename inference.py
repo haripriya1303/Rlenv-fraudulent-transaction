@@ -1,100 +1,97 @@
 import asyncio
 import os
+import textwrap
 import json
 import time
+from dotenv import load_dotenv
+
+load_dotenv()
 from typing import List, Optional
+
 from openai import OpenAI
 
-from env.models import FraudAction
-from env.environment import FraudEnvironment
+from models import FraudAction, FraudObservation
+from client import FraudEnv
 
-# ===== ENV CONFIG =====
-IMAGE_NAME = os.getenv("IMAGE_NAME", "openenv-fraud")
+LOCAL_IMAGE_NAME = os.getenv("LOCAL_IMAGE_NAME") # If you are using docker image
 API_KEY = os.getenv("HF_TOKEN") or os.getenv("OPENAI_API_KEY")
 
-API_BASE_URL = os.getenv("API_BASE_URL", "https://router.huggingface.co/v1")
-MODEL_NAME = os.getenv("MODEL_NAME", "Qwen/Qwen2.5-72B-Instruct")
+API_BASE_URL = os.getenv("API_BASE_URL") or "https://router.huggingface.co/v1"
+MODEL_NAME = os.getenv("MODEL_NAME") or "Qwen/Qwen2.5-72B-Instruct"
 
 TASK_NAME = os.getenv("FRAUD_TASK", "medium")
 BENCHMARK = "openenv-fraud"
 
-MAX_STEPS = 20
-SUCCESS_THRESHOLD = 0.5
-
-# ===== PROMPTS (FROM BASELINE) =====
+MAX_STEPS = 50
+SUCCESS_SCORE_THRESHOLD = 0.5  # normalized score
 
 SYSTEM_PROMPT = """You are an expert banking fraud analyst reviewing transactions in real time.
 
-Classify each transaction as:
-- APPROVE
-- FLAG
-- BLOCK
+Your task is to classify each transaction as exactly one of:
+  - APPROVE: Transaction appears legitimate. Allow it.
+  - FLAG:    Transaction is suspicious. Send for human review.
+  - BLOCK:   Transaction is high-confidence fraud. Reject immediately.
 
-Respond ONLY in JSON:
+Guidelines:
+- BLOCK only when you have strong multi-signal evidence of fraud.
+- FLAG when signals are mixed or moderate risk.
+- APPROVE clearly legitimate transactions to maintain customer experience.
+- Systematic over-blocking will incur operational penalties.
+
+You MUST respond ONLY with a valid JSON object in this exact format:
 {
-  "decision": "...",
-  "confidence": 0.0-1.0,
-  "reasoning": "short"
+  "decision": "APPROVE" | "FLAG" | "BLOCK",
+  "confidence": <float between 0.0 and 1.0>,
+  "reasoning": "<brief explanation>"
 }
 """
 
-TRANSACTION_TEMPLATE = """Transaction:
-ID: {transaction_id}
-Amount: ${amount:.2f} (z={amount_zscore:+.2f})
-Country: {country} (risk={geo_risk_score:.2f})
-Merchant: {merchant_type} (risk={merchant_risk_score:.2f})
-Device: {device_type} (consistency={device_consistency:.2f})
-Velocity: {transaction_velocity}
-Night: {is_night}
-Account age: {account_age_days}
+TRANSACTION_TEMPLATE = """Review this transaction and decide: APPROVE, FLAG, or BLOCK.
 
-Step {step}/{max_steps}
-Fraud rate: {fraud_rate_so_far:.2f}
-Block rate: {block_rate_so_far:.2f}
-Reward: {cumulative_reward:.2f}
+Transaction Details:
+  - ID:           {transaction_id}
+  - Amount:       ${amount:.2f} (z-score: {amount_zscore:+.2f} vs user baseline)
+  - Country:      {country} (geo risk score: {geo_risk_score:.2f})
+  - Merchant:     {merchant_type} (merchant risk: {merchant_risk_score:.2f})
+  - Device:       {device_type} (consistency: {device_consistency:.2f})
+  - User age:     {user_age} years
+  - Velocity:     {transaction_velocity} transactions in last 24h
+  - Night tx:     {is_night}
+  - Account age:  {account_age_days} days
+
+Episode Context:
+  - Step:              {step}/{max_steps}
+  - Fraud rate so far: {fraud_rate_so_far:.1%}
+  - Block rate so far: {block_rate_so_far:.1%}
+  - Cumulative reward: {cumulative_reward:.3f}
+
+Risk interpretation guide:
+  - Geo risk   > 0.5 = high-risk country
+  - Merchant risk > 0.5 = high-risk merchant (crypto, gambling, wire transfer)
+  - Device consistency = 0.0 means brand-new device (potential takeover)
+  - Amount z-score > 2.0 = significant anomaly vs user average
+  - Velocity > 15 = unusual transaction frequency
 """
 
-# ===== LOGGING =====
-
-def log_start(task, env, model):
+def log_start(task: str, env: str, model: str) -> None:
     print(f"[START] task={task} env={env} model={model}", flush=True)
 
 
-def log_step(step, action, reward, done, error):
+def log_step(step: int, action: str, reward: float, done: bool, error: Optional[str]) -> None:
+    error_val = error if error else "null"
+    done_val = str(done).lower()
     print(
-        f"[STEP] step={step} action={action} reward={reward:.2f} done={str(done).lower()} error={error or 'null'}",
+        f"[STEP] step={step} action={action} reward={reward:.2f} done={done_val} error={error_val}",
         flush=True,
     )
 
 
-def log_end(success, steps, rewards):
+def log_end(success: bool, steps: int, score: float, rewards: List[float]) -> None:
     rewards_str = ",".join(f"{r:.2f}" for r in rewards)
     print(f"[END] success={str(success).lower()} steps={steps} rewards={rewards_str}", flush=True)
 
 
-# ===== AGENT (FROM BASELINE) =====
-
-def get_action(client, obs):
-    obs_dict = {
-        "transaction_id": obs.transaction_id,
-        "amount": obs.amount,
-        "amount_zscore": obs.amount_zscore,
-        "country": obs.country,
-        "geo_risk_score": obs.geo_risk_score,
-        "merchant_type": obs.merchant_type,
-        "merchant_risk_score": obs.merchant_risk_score,
-        "device_type": obs.device_type,
-        "device_consistency": obs.device_consistency,
-        "transaction_velocity": obs.transaction_velocity,
-        "is_night": obs.is_night,
-        "account_age_days": obs.account_age_days,
-        "step": obs.step,
-        "max_steps": obs.max_steps,
-        "fraud_rate_so_far": obs.fraud_rate_so_far,
-        "block_rate_so_far": obs.block_rate_so_far,
-        "cumulative_reward": obs.cumulative_reward,
-    }
-
+def get_action(client: OpenAI, obs_dict: dict) -> FraudAction:
     user_prompt = TRANSACTION_TEMPLATE.format(**obs_dict)
 
     for attempt in range(3):
@@ -132,54 +129,62 @@ def get_action(client, obs):
     return FraudAction(decision="FLAG", confidence=0.3, reasoning="fallback")
 
 
-# ===== MAIN =====
-
-async def main():
+async def main() -> None:
     client = OpenAI(base_url=API_BASE_URL, api_key=API_KEY)
 
-    env = await FraudEnvironment.from_docker_image(IMAGE_NAME)
+    env_url = os.getenv("ENV_BASE_URL", "http://localhost:8000")
+    env = FraudEnv(base_url=env_url)
 
     rewards: List[float] = []
     steps_taken = 0
+    score = 0.0
     success = False
 
-    log_start(TASK_NAME, BENCHMARK, MODEL_NAME)
+    log_start(task=TASK_NAME, env=BENCHMARK, model=MODEL_NAME)
 
     try:
-        result = await env.reset()
-        obs = result.observation
+        result = env.reset() # OpenEnv standard uses reset_res.observation
+        obs = result.observation if hasattr(result, "observation") else result
 
         for step in range(1, MAX_STEPS + 1):
-            if result.done:
-                break
+            # Extract features manually to be safe with model types
+            obs_dict = {k: v for k, v in obs.__dict__.items() if not k.startswith("_")}
+            
+            action = get_action(client, obs_dict)
 
-            action = get_action(client, obs)
+            step_res = env.step(action)
+            obs = step_res.observation if hasattr(step_res, "observation") else step_res
 
-            result = await env.step(action)
+            reward = getattr(step_res, "reward", 0.0)
+            if reward is None: reward = 0.0
+            done = getattr(step_res, "done", False)
+            if done is None: done = False
+            error = None
 
-            obs = result.observation
-            reward = result.reward or 0.0
-            done = result.done
-
-            rewards.append(reward)
+            rewards.append(float(reward))
             steps_taken = step
 
-            log_step(step, action.decision, reward, done, None)
+            log_step(step=step, action=action.decision, reward=reward, done=done, error=error)
 
             if done:
+                try:
+                    import requests
+                    resp = requests.get(f"{env_url}/grade").json()
+                    score = resp.get("score", 0.0)
+                except Exception:
+                    score = sum(rewards) / (step * 1.5)
                 break
 
-        avg_reward = sum(rewards) / len(rewards) if rewards else 0
-        success = avg_reward >= SUCCESS_THRESHOLD
+        score = min(max(score, 0.0), 1.0)
+        success = score >= SUCCESS_SCORE_THRESHOLD
 
     finally:
         try:
-            await env.close()
+            env.close()
         except:
             pass
 
-        log_end(success, steps_taken, rewards)
-
+        log_end(success=success, steps=steps_taken, score=score, rewards=rewards)
 
 if __name__ == "__main__":
     asyncio.run(main())

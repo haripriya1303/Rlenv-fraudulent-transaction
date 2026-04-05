@@ -75,20 +75,20 @@ class FraudEnvironment(Environment):
 
         return self._build_observation()
 
-    def step(self, action: FraudAction) -> Tuple[FraudObservation, float, bool, Dict[str, Any]]:
+    def step(self, action: FraudAction) -> FraudObservation:
         """
         Execute one decision step.
 
         Returns:
-            observation: Next transaction to classify
-            reward:      Step reward (dense)
-            done:        True if episode is over
-            info:        Step metadata dict
+            observation: Next transaction to classify (with reward and done)
         """
         if self._current_idx >= len(self._transactions):
             # Episode already done
             obs = self._build_terminal_observation()
-            return obs, 0.0, True, {"error": "Episode already completed"}
+            obs.done = True
+            obs.reward = 0.0
+            obs.metadata = {"error": "Episode already completed"}
+            return obs
 
         tx = self._transactions[self._current_idx]
         self._state.step_count += 1
@@ -180,7 +180,11 @@ class FraudEnvironment(Environment):
             info["summary"] = self._logger.summary()
 
         next_obs = self._build_observation() if not done else self._build_terminal_observation()
-        return next_obs, reward_breakdown.total_reward, done, info
+        next_obs.reward = reward_breakdown.total_reward
+        next_obs.done = done
+        next_obs.metadata = info
+
+        return next_obs
 
     @property
     def state(self) -> FraudState:

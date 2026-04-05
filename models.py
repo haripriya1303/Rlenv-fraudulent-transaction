@@ -90,6 +90,10 @@ class FraudObservation(Observation):
     block_rate_so_far: float = 0.0
     cumulative_reward: float = 0.0
 
+    # --- Step results ---
+    reward: float = 0.0
+    done: bool = False
+
     # --- Task metadata (for agent orientation) ---
     task_name: str = ""
     max_steps: int = 0

@@ -102,18 +102,19 @@ class FraudBaselineAgent:
 
     def __init__(
         self,
-        model: str = "gpt-4o-mini",
+        model: str = "Qwen/Qwen2.5-72B-Instruct",
         temperature: float = 0.0,
         max_retries: int = 3,
     ):
-        api_key = os.environ.get("OPENAI_API_KEY")
+        api_key = os.environ.get("HF_TOKEN") or os.environ.get("OPENAI_API_KEY")
+        base_url = os.environ.get("API_BASE_URL", "https://router.huggingface.co/v1")
         if not api_key:
             raise EnvironmentError(
-                "OPENAI_API_KEY is not set. "
-                "Export it or add it to a .env file: OPENAI_API_KEY=sk-..."
+                "API Key is not set. "
+                "Export it or add it to a .env file: HF_TOKEN=hf_... or OPENAI_API_KEY=hf_..."
             )
 
-        self.client = OpenAI(api_key=api_key)
+        self.client = OpenAI(api_key=api_key, base_url=base_url)
         self.model = model
         self.temperature = temperature
         self.max_retries = max_retries
@@ -329,8 +330,8 @@ def main():
     )
     parser.add_argument(
         "--model",
-        default="gpt-4o-mini",
-        help="OpenAI model to use (default: gpt-4o-mini)",
+        default="Qwen/Qwen2.5-72B-Instruct",
+        help="Model to use (default: Qwen/Qwen2.5-72B-Instruct)",
     )
     parser.add_argument(
         "--all",

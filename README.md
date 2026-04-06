@@ -1,3 +1,13 @@
+---
+title: RL Fraud Detection Environment
+emoji: 🤖
+colorFrom: blue
+colorTo: green
+sdk: docker
+app_file: server/app.py
+pinned: false
+---
+
 # 🏦 OpenEnv Fraud Detection Environment
 
 > **Meta PyTorch Hackathon — Round 1: OpenEnv Environment**

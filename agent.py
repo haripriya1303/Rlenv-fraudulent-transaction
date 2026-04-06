@@ -1,84 +1,85 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import numpy as np
-from typing import List, Dict, Any, Tuple
+from typing import List, Dict, Any, Tuple, Optional
 
 class FraudPolicy(nn.Module):
     """
-    Pure PyTorch Policy Network for Fraud Detection.
-    Architecture: Simple MLP (Multi-Layer Perceptron)
-    Input: Numerical features from FraudObservation
-    Output: Action probabilities for [APPROVE, FLAG, BLOCK]
+    STABLE RESOURCE-EFFICIENT BRAIN:
+    - Input: 19 Features (Synchronized with current extractor)
     """
-    def __init__(self, input_dim: int = 18, hidden_dim: int = 64):
+    def __init__(self, input_dim: int = 19, hidden_dim: int = 128):
         super(FraudPolicy, self).__init__()
-        self.net = nn.Sequential(
-            nn.Linear(input_dim, hidden_dim),
-            nn.ReLU(),
-            nn.Linear(hidden_dim, hidden_dim),
-            nn.ReLU(),
-            nn.Linear(hidden_dim, 3)  # 3 actions
-        )
+        self.input_layer = nn.Linear(input_dim, hidden_dim)
+        self.norm1 = nn.LayerNorm(hidden_dim)
+        self.hidden_layer = nn.Linear(hidden_dim, hidden_dim)
+        self.norm2 = nn.LayerNorm(hidden_dim)
+        self.output_head = nn.Linear(hidden_dim, 3) 
+        
+        for m in self.modules():
+            if isinstance(m, nn.Linear):
+                nn.init.xavier_uniform_(m.weight)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        # Returns categorical distribution (probabilities)
-        logits = self.net(x)
+        # Standardize for both vector and batch input
+        if x.dim() == 1:
+            x = x.unsqueeze(0)
+            
+        x = F.relu(self.norm1(self.input_layer(x)))
+        x = F.relu(self.norm2(self.hidden_layer(x)))
+        logits = self.output_head(x)
         return F.softmax(logits, dim=-1)
 
-def extract_features(obs: Any) -> torch.Tensor:
+def extract_features(obs: Any, llm_decision: str = "APPROVE") -> torch.Tensor:
     """
-    Manually convert FraudObservation to a numerical tensor.
-    Matches the input_dim=18 in FraudPolicy.
+    EXTRACTS EXACTLY 19 FEATURES:
+    [8 tx signals] + [3 episode signals] + [3 llm one-hots] + [4 device one-hots] + [1 reward signal]
     """
-    # 1. Continuous Features (Normalizing where possible)
-    amount = min(obs.amount / 5000.0, 5.0)  # capped normalization
-    user_age = obs.user_age / 100.0
-    velocity = obs.transaction_velocity / 50.0
-    account_age = min(obs.account_age_days / 3650.0, 1.0)
-    z_score = obs.amount_zscore / 10.0
-    geo_risk = obs.geo_risk_score
-    merchant_risk = obs.merchant_risk_score
-    device_cons = obs.device_consistency
-    night = 1.0 if obs.is_night else 0.0
+    # 8 Base signals
+    amount = torch.tanh(torch.tensor([getattr(obs, 'amount', 0.0) / 1000.0]))
+    user_age = torch.tensor([getattr(obs, 'user_age', 30) / 100.0])
+    velocity = torch.tensor([min(getattr(obs, 'transaction_velocity', 1) / 20.0, 1.0)])
+    acc_age = torch.tensor([min(getattr(obs, 'account_age_days', 365) / 3650.0, 1.0)])
+    geo_risk = torch.tensor([getattr(obs, 'geo_risk_score', 0.0)])
+    m_risk = torch.tensor([getattr(obs, 'merchant_risk_score', 0.0)])
+    device_cons = torch.tensor([getattr(obs, 'device_consistency', 1.0)])
+    z_score = torch.tensor([max(-5.0, min(5.0, getattr(obs, 'amount_zscore', 0.0))) / 5.0])
     
-    # 2. Episode Progress
-    progress = obs.step / max(obs.max_steps, 1)
-    fraud_so_far = obs.fraud_rate_so_far
-    block_so_far = obs.block_rate_so_far
-    # Signal if we are over the 25% threshold
-    danger_zone = 1.0 if block_so_far > 0.25 else 0.0
+    # 3 Episode signals
+    p = getattr(obs, 'step', 0) / max(getattr(obs, 'max_steps', 50), 1)
+    progress = torch.tensor([p])
+    block_rate = torch.tensor([getattr(obs, 'block_rate_so_far', 0.0)])
+    danger = torch.tensor([1.0 if getattr(obs, 'block_rate_so_far', 0.0) > 0.20 else 0.0])
     
-    # 3. Categorical: Device Type (mobile, desktop, tablet, unknown)
-    device_one_hot = [0.0, 0.0, 0.0, 0.0]
-    dt = str(obs.device_type).lower()
-    if dt == "mobile": device_one_hot[0] = 1.0
-    elif dt == "desktop": device_one_hot[1] = 1.0
-    elif dt == "tablet": device_one_hot[2] = 1.0
-    else: device_one_hot[3] = 1.0
+    # 3 LLM One-Hots
+    llm_map = {"APPROVE": [1.,0.,0.], "FLAG": [0.,1.,0.], "BLOCK": [0.,0.,1.]}
+    llm_feat = torch.tensor(llm_map.get(str(llm_decision).upper(), [1.,0.,0.]))
 
-    features = [
-        amount, user_age, velocity, account_age, z_score,
-        geo_risk, merchant_risk, device_cons, night,
-        progress, fraud_so_far, block_so_far, danger_zone,
-        *device_one_hot,
-        obs.cumulative_reward / (obs.step + 1)
-    ]
-    
-    return torch.FloatTensor(features)
+    # 4 Device One-Hots
+    dt_map = {"mobile": [1,0,0,0], "desktop": [0,1,0,0], "tablet": [0,0,1,0], "unknown": [0,0,0,1]}
+    device_feat = torch.tensor(dt_map.get(str(getattr(obs, 'device_type', 'unknown')).lower(), [0,0,0,1]), dtype=torch.float32)
 
-def select_action(policy: FraudPolicy, obs: Any) -> Tuple[str, float, torch.Tensor]:
-    """
-    Sample an action from the policy given an observation.
-    Returns: (action_str, log_prob, log_prob_tensor)
-    """
-    state_tensor = extract_features(obs)
+    # 1 Performance Signal
+    avg_reward = torch.tensor([getattr(obs, 'cumulative_reward', 0.0) / (getattr(obs, 'step', 0) + 1)])
+
+    # Total = 19
+    return torch.cat([
+        amount, user_age, velocity, acc_age, geo_risk, m_risk, device_cons, z_score,
+        progress, block_rate, danger, llm_feat, device_feat, avg_reward
+    ]).float()
+
+def select_action(policy: FraudPolicy, obs: Any, llm_decision: str, deterministic: bool = False) -> Tuple[str, float, torch.Tensor]:
+    state_tensor = extract_features(obs, llm_decision)
     probs = policy(state_tensor)
     
-    # Create a categorical distribution
-    m = torch.distributions.Categorical(probs)
-    action_idx = m.sample()
-    log_prob = m.log_prob(action_idx)
+    if deterministic:
+        action_idx = torch.argmax(probs).item()
+        log_prob = torch.log(probs[0, action_idx])
+    else:
+        m = torch.distributions.Categorical(probs)
+        action_idx = m.sample()
+        log_prob = m.log_prob(action_idx)
+        action_idx = action_idx.item()
     
     actions = ["APPROVE", "FLAG", "BLOCK"]
-    return actions[action_idx.item()], probs[action_idx.item()].item(), log_prob
+    return actions[action_idx], float(probs[0, action_idx].item()), log_prob

@@ -3,28 +3,64 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 import argparse
-from typing import List
+import json
+from openai import OpenAI
+from dotenv import load_dotenv
+
+load_dotenv()
+from typing import List, Any
+print(">>> DEBUG: SCRIPT START")
 
 from client import FraudEnv
 from models import FraudAction
-from agent import FraudPolicy, select_action
+from agent import FraudPolicy, select_action, extract_features
 
-# Default Hyperparameters
-LR = 1.6e-3          
+# Hyperparameters (Upgraded for Stability)
+LR = 5e-4            
 GAMMA = 0.99         
+CLIP_GRAD = 1.0      
 ENV_URL = os.getenv("ENV_BASE_URL", "http://localhost:8000")
 
+# OpenAI Setup for Training
+HF_TOKEN = os.getenv("HF_TOKEN")
+API_BASE_URL = os.getenv("API_BASE_URL", "https://router.huggingface.co/v1")
+MODEL_NAME = os.getenv("MODEL_NAME", "Qwen/Qwen2.5-72B-Instruct")
+
+def get_llm_signal(client: OpenAI, obs: Any) -> str:
+    """Gets the LLM's classification signal as a feature."""
+    try:
+        prompt = f"Transaction: Amount={obs.amount}, Country={obs.country}. Decision (APPROVE/FLAG/BLOCK) JSON."
+        resp = client.chat.completions.create(
+            model=MODEL_NAME,
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=40,
+            response_format={"type": "json_object"}
+        )
+        return json.loads(resp.choices[0].message.content).get("decision", "APPROVE").upper()
+    except:
+        return "APPROVE"
+
 def train(episodes: int = 500):
-    # 1. Initialize environment (Standard Sync Client)
+    print(">>> DEBUG: ENTERING TRAIN", flush=True)
+    client = OpenAI(base_url=API_BASE_URL, api_key=HF_TOKEN)
     env_client = FraudEnv(base_url=ENV_URL)
-    policy = FraudPolicy(input_dim=18)
+    
+    # 1. Dynamic Dimension Auto-Detection
+    try:
+        sample_res = env_client.reset()
+        sample_obs = sample_res.observation if hasattr(sample_res, "observation") else sample_res
+        input_dim = extract_features(sample_obs).shape[-1]
+        print(f"✅ AUTO-DETECTED FEATURE DIM: {input_dim}", flush=True)
+    except Exception as e:
+        print(f"⚠️ Failed to auto-detect dimension: {e}. Defaulting to 19.")
+        input_dim = 19
+
+    policy = FraudPolicy(input_dim=input_dim) 
     optimizer = optim.Adam(policy.parameters(), lr=LR)
     
-    print(f"🚀 [START] Strategic RL Training: {episodes} episodes", flush=True)
+    print(f"🚀 [START] Strategic Fusion Training: {episodes} episodes", flush=True)
     
-    # 2. Training Loop
     for ep in range(1, episodes + 1):
-        # Episode lifecycle: open context if required, or direct use
         try:
             res = env_client.reset()
             obs = res.observation if hasattr(res, "observation") else res
@@ -34,24 +70,35 @@ def train(episodes: int = 500):
             done = False
             
             while not done:
-                action_str, confidence, log_prob = select_action(policy, obs)
+                # 1. Get LLM Signal
+                llm_decision = get_llm_signal(client, obs)
+
+                # 2. RL Action with exploration
+                action_str, confidence, log_prob = select_action(
+                    policy, obs, llm_decision=llm_decision, deterministic=False
+                )
                 
                 action = FraudAction(
                     decision=action_str,
                     confidence=float(confidence),
-                    reasoning="Strategic learning step"
+                    reasoning=f"Hybrid strategic update"
                 )
                 
                 step_res = env_client.step(action)
                 obs = step_res.observation if hasattr(step_res, "observation") else step_res
                 
-                reward = getattr(step_res, "reward", 0.0)
-                done = getattr(step_res, "done", False)
+                env_reward = getattr(step_res, "reward", 0.0)
+                reward = env_reward
+                
+                # Internal Reward Shaping
+                if obs.block_rate_so_far > 0.20 and env_reward > 0:
+                    reward += 0.2 
                 
                 log_probs.append(log_prob)
                 rewards.append(reward)
+                done = getattr(step_res, "done", False)
                 
-            # Policy Update (REINFORCE)
+            # --- POLICY UPDATE ---
             returns = []
             G = 0
             for r in reversed(rewards):
@@ -69,13 +116,15 @@ def train(episodes: int = 500):
             optimizer.zero_grad()
             loss = torch.stack(policy_loss).sum()
             loss.backward()
+            
+            torch.nn.utils.clip_grad_norm_(policy.parameters(), CLIP_GRAD)
             optimizer.step()
             
-            if ep % 10 == 0 or ep == 1:
-                print(f"Episode {ep:03d} | Reward: {sum(rewards):+.3f} | Loss: {loss.item():.4f}", flush=True)
+            if ep % 5 == 0 or ep == 1:
+                print(f"Episode {ep:03d} | Reward: {sum(rewards):+.2f} | Loss: {loss.item():.4f}", flush=True)
 
         except Exception as e:
-            print(f"⚠️ Episode {ep} failed: {e}", flush=True)
+            print(f"⚠️ Episode {ep} error: {e}", flush=True)
             continue
 
     torch.save(policy.state_dict(), "agent_weights.pth")

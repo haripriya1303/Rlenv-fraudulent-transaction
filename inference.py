@@ -3,6 +3,7 @@ import os
 import textwrap
 import json
 import time
+import requests
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -12,7 +13,7 @@ from openai import OpenAI
 
 from models import FraudAction, FraudObservation
 from client import FraudEnv
-from agent import FraudPolicy, extract_features
+from agent import FraudPolicy, extract_features, select_action
 import torch
 
 LOCAL_IMAGE_NAME = os.getenv("LOCAL_IMAGE_NAME") # If you are using docker image
@@ -98,13 +99,13 @@ def log_end(success: bool, steps: int, score: float, rewards: List[float]) -> No
 
 def get_hybrid_action(client: OpenAI, policy: Optional[FraudPolicy], obs: FraudObservation) -> FraudAction:
     """
-    Hybrid Strategic Agent:
-    1. LLM provides Reasoning (Satisfies Hackathon reasoning mandate)
-    2. RL Policy provide Strategy (Strategic Decision based on trained weights)
+    STRETIC FUSION AGENT:
+    Uses LLM for reasoning and RL Policy for the final deterministic decision.
     """
     user_prompt = TRANSACTION_TEMPLATE.format(**obs.__dict__)
     
-    # --- Part 1: LLM Reasoning (Mandatory OpenAI Client Call) ---
+    # Phase 1: LLM reasoning
+    llm_decision = "APPROVE"
     reasoning = "N/A"
     try:
         response = client.chat.completions.create(
@@ -121,26 +122,27 @@ def get_hybrid_action(client: OpenAI, policy: Optional[FraudPolicy], obs: FraudO
         reasoning = str(parsed.get("reasoning", ""))
         llm_decision = parsed.get("decision", "APPROVE").upper()
     except Exception:
-        llm_decision = "FLAG"
+        llm_decision = "APPROVE"
 
-    # --- Part 2: Strategic RL Decision (Pure PyTorch) ---
+    # Phase 2: Strategic RL Decision (Deterministic)
     if policy:
-        with torch.no_grad():
-            state_tensor = extract_features(obs)
-            probs = policy(state_tensor)
-            action_idx = torch.argmax(probs).item()
-            decision = ["APPROVE", "FLAG", "BLOCK"][action_idx]
-            confidence = float(probs[action_idx].item())
-    else:
-        # Fallback to LLM if no policy weights are found
-        decision = llm_decision
-        confidence = 0.5
-
-    return FraudAction(
-        decision=decision,
-        confidence=confidence,
-        reasoning=f"[Strategic] {reasoning}"[:240]
-    )
+        try:
+            action_str, confidence, _ = select_action(
+                policy, 
+                obs, 
+                llm_decision=llm_decision, 
+                deterministic=True 
+            )
+            return FraudAction(
+                decision=action_str, 
+                confidence=float(confidence), 
+                reasoning=f"[Fusion] {reasoning}"
+            )
+        except Exception as e:
+            print(f"ACTION ERROR: {e}")
+            return FraudAction(decision="FLAG", confidence=0.5, reasoning="RL Fallback")
+    
+    return FraudAction(decision=llm_decision, confidence=0.5, reasoning=f"[LLM] {reasoning}")
 
 
 def main() -> None:
@@ -155,22 +157,40 @@ def main() -> None:
     success = False
 
     # 1. Load Strategic Policy (optional weight file)
-    policy = FraudPolicy()
     weights_path = "agent_weights.pth"
-    if os.path.exists(weights_path):
-        policy.load_state_dict(torch.load(weights_path, map_location=torch.device('cpu')))
-        policy.eval()
-    else:
-        policy = None # Fallback to Zero-Shot LLM behavior
+    try:
+        sample_obs = env.reset().observation 
+        input_dim = extract_features(sample_obs).shape[-1]
+        policy = FraudPolicy(input_dim=input_dim) 
+
+        if os.path.exists(weights_path):
+            state_dict = torch.load(weights_path, map_location=torch.device("cpu"))
+            if state_dict["input_layer.weight"].shape[1] == input_dim:
+                policy.load_state_dict(state_dict)
+                policy.eval()
+                print(f"✅ Loaded strategic weights ({input_dim} features)")
+            else:
+                print(f"⚠️ Weight mismatch. Falling back to Zero-Shot.")
+                policy = None
+        else:
+            policy = None 
+    except Exception as e:
+        print(f"⚠️ Loading error: {e}. Defaulting to Zero-Shot.")
+        policy = None
 
     log_start(task=TASK_NAME, env=BENCHMARK, model=MODEL_NAME)
 
     try:
-        result = env.reset() # OpenEnv standard uses reset_res.observation
+        result = env.reset() 
         obs = result.observation if hasattr(result, "observation") else result
 
         for step in range(1, MAX_STEPS + 1):
-            action = get_hybrid_action(client, policy, obs)
+            # SAFE ACTION WRAPPER
+            try:
+                action = get_hybrid_action(client, policy, obs)
+            except Exception as e:
+                print(f"FATAL ACTION SELECTION ERROR: {e}")
+                action = FraudAction(decision="FLAG", confidence=0.5, reasoning="Fatal action error")
 
             step_res = env.step(action)
             obs = step_res.observation if hasattr(step_res, "observation") else step_res
@@ -188,7 +208,6 @@ def main() -> None:
 
             if done:
                 try:
-                    import requests
                     resp = requests.get(f"{env_url}/grade").json()
                     score = resp.get("score", 0.0)
                 except Exception:
@@ -198,8 +217,8 @@ def main() -> None:
         score = min(max(score, 0.0), 1.0)
         success = score >= SUCCESS_SCORE_THRESHOLD
 
-    except Exception:
-        # Graceful exit for compliance
+    except Exception as e:
+        print(f"FATAL ERROR: {str(e)}") 
         success = False
         steps_taken = len(rewards)
 

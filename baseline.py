@@ -230,7 +230,12 @@ def run_task(agent: FraudBaselineAgent, task: str) -> Dict[str, Any]:
                 reasoning=action_data["reasoning"],
             )
 
-            obs, reward, done, info = env.step(action)
+            step_obs = env.step(action)
+            # FraudEnvironment returns a single FraudObservation (not a Gym tuple)
+            obs    = step_obs
+            reward = getattr(step_obs, "reward", 0.0)
+            done   = getattr(step_obs, "done", False)
+            info   = getattr(step_obs, "metadata", {}) or {}
             cumulative_reward += reward
             step_results.append({
                 "decision":   action.decision,

@@ -23,7 +23,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # Install openenv-core first (pinned for reproducibility)
-RUN pip install --no-cache-dir openenv-core==0.1.1
+RUN pip install --no-cache-dir openenv-core==0.2.0
 
 # Copy and install package requirements
 COPY server/requirements.txt /tmp/requirements.txt

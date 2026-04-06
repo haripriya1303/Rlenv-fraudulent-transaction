@@ -13,7 +13,7 @@ ENV PYTHONUNBUFFERED=1 \
     FRAUD_TASK=medium \
     LOG_DIR=/app/outputs/logs \
     ENABLE_WEB_INTERFACE=true \
-    PORT=8000
+    PORT=7860
 
 WORKDIR /app
 
@@ -37,10 +37,10 @@ RUN mkdir -p /app/outputs/logs /app/outputs/evals
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=15s --retries=3 \
-    CMD curl -f http://localhost:${PORT}/health || exit 1
+    CMD curl -f http://localhost:7860/health || exit 1
 
 # Expose port
-EXPOSE ${PORT}
+EXPOSE 7860
 
 # Run the FastAPI server
-CMD ["uvicorn", "server.app:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]
+CMD ["uvicorn", "server.app:app", "--host", "0.0.0.0", "--port", "7860", "--workers", "1"]

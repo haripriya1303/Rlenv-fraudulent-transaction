@@ -36,13 +36,17 @@ except ImportError:
     torch = None
 
 # ── Config ────────────────────────────────────────────────────────────────────
-# STRICT COMPLIANCE: Use injected environment variables as requested by Hackathon dashboard.
+# PRE-SUBMISSION CHECKLIST COMPLIANCE
 API_BASE_URL = os.environ.get("API_BASE_URL", "https://router.huggingface.co/v1")
-API_KEY      = os.environ.get("API_KEY") or os.environ.get("HF_TOKEN")
 MODEL_NAME   = os.environ.get("MODEL_NAME", "Qwen/Qwen2.5-72B-Instruct")
+HF_TOKEN     = os.environ.get("HF_TOKEN")
+API_KEY      = os.environ.get("API_KEY")
 
-if not API_KEY:
-    print("[DEBUG] CRITICAL: API_KEY/HF_TOKEN missing. LLM calls will fail.", flush=True)
+# Choose the active key (prioritize API_KEY from proxy if present)
+ACTIVE_API_KEY = API_KEY or HF_TOKEN
+
+if not ACTIVE_API_KEY:
+    print("[DEBUG] CRITICAL: No API_KEY or HF_TOKEN found in environment.", flush=True)
 
 TASK_NAME = os.getenv("FRAUD_TASK", "medium")
 BENCHMARK = "openenv-fraud"
@@ -125,7 +129,7 @@ def get_hybrid_action(client: OpenAI, policy: Optional[FraudPolicy], obs: FraudO
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def main() -> None:
-    client = OpenAI(base_url=API_BASE_URL, api_key=API_KEY)
+    client = OpenAI(base_url=API_BASE_URL, api_key=ACTIVE_API_KEY)
     env_url = os.getenv("ENV_BASE_URL", "http://localhost:8000")
     env = FraudEnv(base_url=env_url or "http://localhost:8000")
 

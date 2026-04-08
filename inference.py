@@ -105,15 +105,14 @@ def get_hybrid_action(client: OpenAI, policy, obs: FraudObservation) -> FraudAct
     llm_decision = "APPROVE"
     reasoning = "N/A"
 
+    # Combined prompt for max proxy compatibility
+    full_prompt = f"{SYSTEM_PROMPT}\n\n{user_prompt}"
+    
     try:
         response = client.chat.completions.create(
             model=MODEL_NAME,
-            messages=[
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": user_prompt},
-            ],
+            messages=[{"role": "user", "content": full_prompt}],
             temperature=0.0,
-            max_tokens=256,
         )
         content = response.choices[0].message.content
         if "{" in content:
@@ -140,21 +139,11 @@ def get_hybrid_action(client: OpenAI, policy, obs: FraudObservation) -> FraudAct
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def main() -> None:
-    # R8: [START] MUST be printed before anything else, including env.reset()
+    # ── R8: log_start BEFORE env.reset() ─────────────────────────────────────
     log_start(task=TASK_NAME, env=BENCHMARK, model=MODEL_NAME)
 
-    # 🔗 LITELLM PROXY CONNECTION
-    # We use os.environ directly to ensure we catch the platform's injected values
-    effective_url = os.environ.get("API_BASE_URL", API_BASE_URL)
-    effective_key = os.environ.get("API_KEY") or os.environ.get("HF_TOKEN")
-
-    print(f">>> [INIT] Base URL: {effective_url}", flush=True)
-    print(f">>> [INIT] API Key Provided: {'Yes' if effective_key else 'No'}", flush=True)
-
-    client = OpenAI(
-        base_url=effective_url,
-        api_key=effective_key,
-    )
+    # 🔗 VERBATIM Initialization per "How to Fix" step 2
+    client = OpenAI(base_url=os.environ["API_BASE_URL"], api_key=os.environ["API_KEY"])
 
     env_url = os.getenv("ENV_BASE_URL", "http://localhost:8000")
     env = FraudEnv(base_url=env_url)

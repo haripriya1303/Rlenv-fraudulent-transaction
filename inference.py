@@ -37,10 +37,10 @@ except ImportError:
 
 # ── Config ────────────────────────────────────────────────────────────────────
 # PRE-SUBMISSION CHECKLIST COMPLIANCE
-API_BASE_URL = os.environ.get("API_BASE_URL", "https://router.huggingface.co/v1")
-MODEL_NAME   = os.environ.get("MODEL_NAME", "Qwen/Qwen2.5-72B-Instruct")
-HF_TOKEN     = os.environ.get("HF_TOKEN")
-API_KEY      = os.environ.get("API_KEY")
+API_BASE_URL = os.getenv("API_BASE_URL", "https://router.huggingface.co/v1")
+MODEL_NAME   = os.getenv("MODEL_NAME", "Qwen/Qwen2.5-72B-Instruct")
+HF_TOKEN     = os.getenv("HF_TOKEN")
+API_KEY      = os.getenv("API_KEY")
 
 # Choose the active key (prioritize API_KEY from proxy if present)
 ACTIVE_API_KEY = API_KEY or HF_TOKEN

@@ -11,6 +11,8 @@ from dataclasses import dataclass
 from typing import Dict, Tuple
 
 
+import math
+
 # ---------------------------------------------------------------------------
 # Base reward table
 # ---------------------------------------------------------------------------
@@ -71,8 +73,12 @@ class RewardEngine:
 
         # Confidence modulation: Higher confidence boosts correct rewards and increases penalties for mistakes
         confidence_bonus = base * (confidence * 0.2)
-        total = base + over_block_penalty + confidence_bonus
-        total = round(max(-10.0, min(10.0, total)), 4)
+        raw_total = base + over_block_penalty + confidence_bonus
+        
+        # 🛡️ Sigmoid Normalization [0, 1] for Hackathon Compliance
+        # Ensures rewards are strictly in (0, 1) to avoid validator boundary errors
+        total = 1.0 / (1.0 + math.exp(-raw_total))
+        total = round(max(0.001, min(0.999, total)), 4)
 
         correctness = self._classify_correctness(decision, is_fraud)
         label = self._human_label(decision, is_fraud, over_block_penalty < -0.1)

@@ -37,14 +37,23 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
 # 4. ADD DIRECT STABILITY ROUTES
 @app.post("/reset")
 async def manual_reset(request: Request):
-    """Direct HTTP route for resetting the environment."""
+    """Direct HTTP route for resetting the environment with optional task switching."""
     try:
         body = await request.json()
-        config = body.get("data", body) if body else {}
+        payload = body.get("data", body) if body else {}
+        
+        # 🎯 TASK SWITCHING: Allow client to specify 'easy', 'medium', or 'hard'
+        new_task = payload.get("task")
+        if new_task in ["easy", "medium", "hard"]:
+            print(f">>> [INIT] Switching task to: {new_task}", flush=True)
+            env_instance.task_name = new_task
+            env_instance.reset_task_config() 
+            
         obs = env_instance.reset()
         return {"status": "success", "data": {"observation": obs}}
     except Exception as e:
         print(f">>> [ERROR] Manual reset failed: {e}", flush=True)
+        traceback.print_exc()
         return JSONResponse(status_code=500, content={"error": str(e)})
 
 @app.post("/step")

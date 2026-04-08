@@ -39,12 +39,12 @@ class FraudEnv:
     def __exit__(self, exc_type, exc_val, exc_tb): self.close()
     def close(self): self._session.close()
 
-    def reset(self, **kwargs) -> StepResult:
-        """Resets the environment."""
+    def reset(self, task: Optional[str] = None, **kwargs) -> StepResult:
+        """Resets the environment, optionally switching the task."""
         try:
-            # We try the root /reset first as it's the most stable
             url = f"{self.base_url}/reset"
-            resp = self._session.post(url, json={}, timeout=20)
+            payload = {"task": task} if task else {}
+            resp = self._session.post(url, json=payload, timeout=20)
             resp.raise_for_status()
             
             # Server returns observation in 'data.observation' or 'observation'

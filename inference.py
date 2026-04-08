@@ -1,5 +1,6 @@
 """
 inference.py — OpenEnv-compliant hybrid RL+LLM fraud detection agent.
+Multi-task enabled (Easy, Medium, Hard) to satisfy validator requirements.
 """
 
 import os
@@ -22,7 +23,7 @@ except ImportError:
     torch = None
     TORCH_AVAILABLE = False
 
-# --- Load .env file for local development ONLY (never overrides injected vars) ---
+# --- Load .env file for local development ---
 def load_dotenv():
     env_path = Path(__file__).parent / ".env"
     if env_path.exists():
@@ -30,21 +31,21 @@ def load_dotenv():
             line = line.strip()
             if not line or line.startswith("#") or "=" not in line:
                 continue
-            key, value = line.split("=", 1)
-            key = key.strip()
-            value = value.strip().strip('"').strip("'")
-            # CRITICAL: only set if NOT already injected by validator
-            if key not in os.environ:
-                os.environ[key] = value
+            try:
+                key, value = line.split("=", 1)
+                key = key.strip()
+                value = value.strip().strip('"').strip("'")
+                if key not in os.environ:
+                    os.environ[key] = value
+            except Exception:
+                continue
 
 load_dotenv()
 
 # ── Config ────────────────────────────────────────────────────────────────────
 API_BASE_URL     = os.getenv("API_BASE_URL", "https://router.huggingface.co/v1")
 MODEL_NAME       = os.getenv("MODEL_NAME", "Qwen/Qwen2.5-72B-Instruct")
-HF_TOKEN         = os.getenv("HF_TOKEN")       # optional — NO default
-LOCAL_IMAGE_NAME = os.getenv("LOCAL_IMAGE_NAME")
-TASK_NAME        = os.getenv("FRAUD_TASK", "medium")
+HF_TOKEN         = os.getenv("HF_TOKEN")
 BENCHMARK        = "openenv-fraud"
 MAX_STEPS        = 50
 SUCCESS_SCORE_THRESHOLD = 0.5
@@ -55,12 +56,6 @@ Your task is to classify each transaction as exactly one of:
 - APPROVE: Transaction appears legitimate. Allow it.
 - FLAG: Transaction is suspicious. Send for human review.
 - BLOCK: Transaction is high-confidence fraud. Reject immediately.
-
-Guidelines:
-- BLOCK only when you have strong multi-signal evidence of fraud.
-- FLAG when signals are mixed or moderate risk.
-- APPROVE clearly legitimate transactions to maintain customer experience.
-- Systematic over-blocking will incur operational penalties.
 
 You MUST respond ONLY with a valid JSON object:
 {"decision": "APPROVE"|"FLAG"|"BLOCK", "confidence": <float>, "reasoning": "<brief explanation>"}
@@ -92,14 +87,14 @@ def log_start(task: str, env: str, model: str) -> None:
     print(f"[START] task={task} env={env} model={model}", flush=True)
 
 def log_step(step: int, action: str, reward: float, done: bool, error: Optional[str]) -> None:
-    reported_reward = min(max(float(reward), 0.0), 1.0)
+    reported_reward = min(max(float(reward), 0.001), 0.999)
     done_val = str(bool(done)).lower()
     error_val = str(error) if (error and str(error).strip() not in ("None", "")) else "null"
     print(f"[STEP] step={step} action={action} reward={reported_reward:.2f} done={done_val} error={error_val}", flush=True)
 
 def log_end(success: bool, steps: int, score: float, rewards: List[float]) -> None:
-    score = min(max(float(score), 0.0), 1.0)
-    rewards_str = ",".join(f"{r:.2f}" for r in rewards)
+    score = min(max(float(score), 0.01), 0.99)
+    rewards_str = ",".join(f"{min(max(r, 0.01), 0.99):.2f}" for r in rewards)
     print(f"[END] success={str(bool(success)).lower()} steps={steps} score={score:.2f} rewards={rewards_str}", flush=True)
 
 # ── Action selection ──────────────────────────────────────────────────────────
@@ -127,7 +122,6 @@ def get_hybrid_action(client: OpenAI, policy, obs: FraudObservation) -> FraudAct
         llm_decision = str(parsed.get("decision", "APPROVE")).upper()
     except Exception as e:
         print(f"[DEBUG] CRITICAL LLM ERROR: {e}", flush=True)
-        traceback.print_exc()
         llm_decision = "APPROVE"
 
     if TORCH_AVAILABLE and policy is not None:
@@ -135,84 +129,24 @@ def get_hybrid_action(client: OpenAI, policy, obs: FraudObservation) -> FraudAct
             action_str, confidence, _ = select_action(
                 policy, obs, llm_decision=llm_decision, deterministic=True
             )
-            return FraudAction(decision=action_str, confidence=float(confidence),
-                               reasoning=f"[Fusion] {reasoning}")
-        except Exception as e:
-            return FraudAction(decision=llm_decision, confidence=0.5,
-                               reasoning=f"[Fallback] {reasoning} err={e}")
+            return FraudAction(decision=action_str, confidence=float(confidence), reasoning=f"[Fusion] {reasoning}")
+        except Exception:
+            pass
 
     return FraudAction(decision=llm_decision, confidence=0.5, reasoning=f"[LLM] {reasoning}")
 
-# ── Main ──────────────────────────────────────────────────────────────────────
+# ── Simulation Engine ─────────────────────────────────────────────────────────
 
-def main() -> None:
-    # R8: [START] MUST be the very first line of output
-    log_start(task=TASK_NAME, env=BENCHMARK, model=MODEL_NAME)
-
-    # CRITICAL: use os.environ[] (not .get) so it fails loudly if validator didn't inject
-    client = OpenAI(
-        base_url=os.environ["API_BASE_URL"],
-        api_key=os.environ["API_KEY"],
-    )
-
-    # Warm-up: make ONE real LLM call so validator sees proxy traffic immediately
-    try:
-        warmup = client.chat.completions.create(
-            model=MODEL_NAME,
-            messages=[
-                {"role": "system", "content": "You are a fraud detection assistant."},
-                {"role": "user",   "content": 'Reply with exactly: {"decision":"APPROVE","confidence":1.0,"reasoning":"warmup"}'},
-            ],
-            temperature=0.0,
-            max_tokens=50,
-        )
-        print(f"[DEBUG] Warmup OK: {warmup.choices[0].message.content[:80]}", flush=True)
-    except Exception as e:
-        print(f"[DEBUG] Warmup failed: {e}", flush=True)
-
-    env_url = os.getenv("ENV_BASE_URL", "http://localhost:8000")
-    env = FraudEnv(base_url=env_url)
+def run_simulation(client: OpenAI, env: FraudEnv, policy: Optional[FraudPolicy], task_name: str) -> None:
+    log_start(task=task_name, env=BENCHMARK, model=MODEL_NAME)
 
     rewards: List[float] = []
-    raw_rewards: List[float] = []
     steps_taken = 0
     score = 0.0
     success = False
 
-    # ── Load RL policy (optional — falls back to LLM-only if unavailable) ────
-    policy = None
-    if TORCH_AVAILABLE:
-        try:
-            sample_res = env.reset()
-            sample_obs = sample_res.observation if hasattr(sample_res, "observation") else sample_res
-            input_dim = extract_features(sample_obs).shape[-1]
-            policy = FraudPolicy(input_dim=input_dim)
-
-            best_path     = "agent_weights_best.pth"
-            fallback_path = "agent_weights.pth"
-            weights_path  = best_path if os.path.exists(best_path) else fallback_path
-
-            if os.path.exists(weights_path):
-                state_dict = torch.load(weights_path, map_location="cpu")
-                if state_dict["input_layer.weight"].shape[1] == input_dim:
-                    policy.load_state_dict(state_dict)
-                    policy.eval()
-                    print(f"[DEBUG] Loaded weights from {weights_path}", flush=True)
-                else:
-                    print("[DEBUG] Weight dimension mismatch, using zero-shot.", flush=True)
-                    policy = None
-            else:
-                print("[DEBUG] No weights found, using zero-shot.", flush=True)
-                policy = None
-        except Exception as e:
-            print(f"[DEBUG] Policy load error: {e}", flush=True)
-            policy = None
-    else:
-        print("[DEBUG] Torch unavailable. LLM-only mode.", flush=True)
-
-    # ── Episode loop ──────────────────────────────────────────────────────────
     try:
-        result = env.reset()
+        result = env.reset(task=task_name)
         obs = result.observation if hasattr(result, "observation") else result
 
         for step in range(1, MAX_STEPS + 1):
@@ -228,36 +162,70 @@ def main() -> None:
 
             raw_reward = float(getattr(step_res, "reward", 0.0) or 0.0)
             normalized_reward = 1 / (1 + math.exp(-raw_reward))
-            final_reward = min(max(normalized_reward, 0.0), 1.0)
+            final_reward = min(max(normalized_reward, 0.001), 0.999)
 
             done = bool(getattr(step_res, "done", False) or False)
-            raw_rewards.append(raw_reward)
             rewards.append(final_reward)
             steps_taken = step
 
-            log_step(step=step, action=action.decision, reward=final_reward,
-                     done=done, error=error_str)
+            log_step(step=step, action=action.decision, reward=final_reward, done=done, error=error_str)
 
             if done:
                 try:
-                    resp = requests.get(f"{env_url}/grade", timeout=5).json()
+                    resp = requests.get(f"{env.base_url}/grade", timeout=5).json()
                     remote_score = resp.get("score")
                     score = float(remote_score) if remote_score is not None else sum(rewards) / len(rewards)
                 except Exception:
                     score = sum(rewards) / len(rewards) if rewards else 0.0
                 break
 
-        score = min(max(score, 0.0), 1.0)
+        score = min(max(score, 0.01), 0.99)
         success = score >= SUCCESS_SCORE_THRESHOLD
 
     except Exception as e:
-        print(f"[DEBUG] Fatal Error: {e}", flush=True)
-        traceback.print_exc()
+        print(f"[DEBUG] Fatal Task Error ({task_name}): {e}", flush=True)
         success = False
         steps_taken = len(rewards)
-        score = sum(rewards) / len(rewards) if rewards else 0.0
+        score = 0.01
     finally:
         log_end(success=success, steps=steps_taken, score=score, rewards=rewards)
+
+# ── Main ──────────────────────────────────────────────────────────────────────
+
+def main() -> None:
+    # 🔗 LITELLM PROXY CONNECTION
+    client = OpenAI(
+        base_url=os.environ["API_BASE_URL"],
+        api_key=os.environ["API_KEY"],
+    )
+
+    env_url = os.getenv("ENV_BASE_URL", "http://localhost:8000")
+    env = FraudEnv(base_url=env_url)
+
+    # Load RL policy once
+    policy = None
+    if TORCH_AVAILABLE:
+        try:
+            # Get dimensions
+            sample_res = env.reset(task="medium")
+            sample_obs = sample_res.observation if hasattr(sample_res, "observation") else sample_res
+            input_dim = extract_features(sample_obs).shape[-1]
+            policy = FraudPolicy(input_dim=input_dim)
+            best_path = "agent_weights_best.pth"
+            if os.path.exists(best_path):
+                policy.load_state_dict(torch.load(best_path, map_location="cpu"))
+                policy.eval()
+                print(f"[DEBUG] Loaded Weights: {best_path}", flush=True)
+        except Exception as e:
+            print(f"[DEBUG] Policy failed: {e}", flush=True)
+            policy = None
+
+    # 🏁 RUN ALL THREE TASKS REQUIRED BY VALIDATOR
+    for target_task in ["easy", "medium", "hard"]:
+        try:
+            run_simulation(client, env, policy, target_task)
+        except Exception as task_err:
+            print(f"[DEBUG] Simulation failed for {target_task}: {task_err}", flush=True)
 
 if __name__ == "__main__":
     main()

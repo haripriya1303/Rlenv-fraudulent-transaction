@@ -36,14 +36,12 @@ except ImportError:
     torch = None
 
 # ── Config ────────────────────────────────────────────────────────────────────
-HF_TOKEN = os.getenv("HF_TOKEN")
-if HF_TOKEN is None:
-    print("[DEBUG] HF_TOKEN is missing. Set it for LLM support.", flush=True)
-    HF_TOKEN = "dummy_token"
-
 API_BASE_URL = os.getenv("API_BASE_URL", "https://router.huggingface.co/v1")
-MODEL_NAME   = os.getenv("MODEL_NAME",   "Qwen/Qwen2.5-72B-Instruct")
-API_KEY      = HF_TOKEN
+API_KEY      = os.getenv("API_KEY") or os.getenv("HF_TOKEN") or "dummy_token"
+MODEL_NAME   = os.getenv("MODEL_NAME", "Qwen/Qwen2.5-72B-Instruct")
+
+if API_KEY == "dummy_token":
+    print("[DEBUG] WARNING: API_KEY is missing. LLM calls will fail.", flush=True)
 
 TASK_NAME = os.getenv("FRAUD_TASK", "medium")
 BENCHMARK = "openenv-fraud"

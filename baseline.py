@@ -106,12 +106,12 @@ class FraudBaselineAgent:
         temperature: float = 0.0,
         max_retries: int = 3,
     ):
-        api_key = os.environ.get("HF_TOKEN") or os.environ.get("OPENAI_API_KEY")
+        api_key = os.environ.get("API_KEY") or os.environ.get("HF_TOKEN") or os.environ.get("OPENAI_API_KEY")
         base_url = os.environ.get("API_BASE_URL", "https://router.huggingface.co/v1")
         if not api_key:
             raise EnvironmentError(
                 "API Key is not set. "
-                "Export it or add it to a .env file: HF_TOKEN=hf_... or OPENAI_API_KEY=hf_..."
+                "Export it or add it to a .env file: API_KEY=..., HF_TOKEN=..., or OPENAI_API_KEY=..."
             )
 
         self.client = OpenAI(api_key=api_key, base_url=base_url)

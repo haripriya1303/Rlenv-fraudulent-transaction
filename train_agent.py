@@ -23,8 +23,8 @@ CLIP_GRAD = 1.0
 ENV_URL = os.getenv("ENV_BASE_URL", "http://localhost:8000")
 
 # OpenAI Setup for Training
-HF_TOKEN = os.getenv("HF_TOKEN")
 API_BASE_URL = os.getenv("API_BASE_URL", "https://router.huggingface.co/v1")
+API_KEY = os.getenv("API_KEY") or os.getenv("HF_TOKEN") or "dummy_token"
 MODEL_NAME = os.getenv("MODEL_NAME", "Qwen/Qwen2.5-72B-Instruct")
 
 def get_llm_signal(client: OpenAI, obs: Any) -> str:
@@ -43,7 +43,7 @@ def get_llm_signal(client: OpenAI, obs: Any) -> str:
 
 def train(episodes: int = 500):
     print(">>> DEBUG: ENTERING TRAIN", flush=True)
-    client = OpenAI(base_url=API_BASE_URL, api_key=HF_TOKEN)
+    client = OpenAI(base_url=API_BASE_URL, api_key=API_KEY)
     env_client = FraudEnv(base_url=ENV_URL)
     
     # 1. Dynamic Dimension Auto-Detection

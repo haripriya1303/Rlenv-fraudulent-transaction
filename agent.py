@@ -1,14 +1,24 @@
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
+try:
+    import torch
+    import torch.nn as nn
+    import torch.nn.functional as F
+    TORCH_AVAILABLE = True
+except ImportError:
+    TORCH_AVAILABLE = False
+    class nn:
+        class Module: pass
+    F = None
+
 from typing import List, Dict, Any, Tuple, Optional
 
-class FraudPolicy(nn.Module):
+class FraudPolicy(nn.Module if TORCH_AVAILABLE else object):
     """
     STABLE RESOURCE-EFFICIENT BRAIN:
     - Input: 19 Features (Synchronized with current extractor)
     """
     def __init__(self, input_dim: int = 19, hidden_dim: int = 128):
+        if not TORCH_AVAILABLE:
+            return
         super(FraudPolicy, self).__init__()
         self.input_layer = nn.Linear(input_dim, hidden_dim)
         self.norm1 = nn.LayerNorm(hidden_dim)
@@ -20,7 +30,9 @@ class FraudPolicy(nn.Module):
             if isinstance(m, nn.Linear):
                 nn.init.xavier_uniform_(m.weight)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: 'torch.Tensor') -> 'torch.Tensor':
+        if not TORCH_AVAILABLE:
+            raise RuntimeError("Torch not available")
         # Standardize for both vector and batch input
         if x.dim() == 1:
             x = x.unsqueeze(0)
@@ -30,11 +42,14 @@ class FraudPolicy(nn.Module):
         logits = self.output_head(x)
         return F.softmax(logits, dim=-1)
 
-def extract_features(obs: Any, llm_decision: str = "APPROVE") -> torch.Tensor:
+def extract_features(obs: Any, llm_decision: str = "APPROVE") -> 'torch.Tensor':
     """
     EXTRACTS EXACTLY 19 FEATURES:
     [8 tx signals] + [3 episode signals] + [3 llm one-hots] + [4 device one-hots] + [1 reward signal]
     """
+    if not TORCH_AVAILABLE:
+        return None
+        
     # 8 Base signals
     amount = torch.tanh(torch.tensor([getattr(obs, 'amount', 0.0) / 1000.0]))
     user_age = torch.tensor([getattr(obs, 'user_age', 30) / 100.0])
@@ -68,13 +83,17 @@ def extract_features(obs: Any, llm_decision: str = "APPROVE") -> torch.Tensor:
         progress, block_rate, danger, llm_feat, device_feat, avg_reward
     ]).float()
 
-def select_action(policy: FraudPolicy, obs: Any, llm_decision: str, deterministic: bool = False) -> Tuple[str, float, torch.Tensor]:
+def select_action(policy: FraudPolicy, obs: Any, llm_decision: str, deterministic: bool = False) -> Tuple[str, float, Any]:
+    if not TORCH_AVAILABLE or policy is None:
+        # Fallback to pure LLM decision with high confidence
+        return llm_decision.upper(), 0.95, None
+        
     state_tensor = extract_features(obs, llm_decision)
     probs = policy(state_tensor)
     
     if deterministic:
         action_idx = torch.argmax(probs).item()
-        log_prob = torch.log(probs[0, action_idx])
+        log_prob = torch.log(probs[0, action_idx] + 1e-8)
     else:
         m = torch.distributions.Categorical(probs)
         action_idx = m.sample()

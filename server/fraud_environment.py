@@ -166,6 +166,7 @@ class FraudEnvironment(Environment):
             "fraud_signals":  tx.fraud_signals,
             "fraud_score":    tx.fraud_score,
             "step":           self._state.step_count,
+            "error":          None
         }
 
         if done:
@@ -180,8 +181,8 @@ class FraudEnvironment(Environment):
             info["summary"] = self._logger.summary()
 
         next_obs = self._build_observation() if not done else self._build_terminal_observation()
-        next_obs.reward = reward_breakdown.total_reward
-        next_obs.done = done
+        next_obs.reward = float(reward_breakdown.total_reward)
+        next_obs.done = bool(done)
         next_obs.metadata = info
 
         return next_obs
@@ -241,11 +242,25 @@ class FraudEnvironment(Environment):
         )
 
     def _build_terminal_observation(self) -> FraudObservation:
-        """Empty observation for terminal step."""
+        """Full observation for terminal step (Ensures all fields present for judge agents)."""
         return FraudObservation(
             transaction_id="TERMINAL",
+            amount=0.0,
+            country="XX",
+            merchant_type="none",
+            device_type="none",
+            user_age=0,
+            transaction_velocity=0,
+            is_night=False,
+            account_age_days=0,
+            amount_zscore=0.0,
+            geo_risk_score=0.0,
+            merchant_risk_score=0.0,
+            device_consistency=1.0,
             step=self._state.step_count,
             episode_id=self._state.episode_id,
+            fraud_rate_so_far=0.0,
+            block_rate_so_far=0.0,
             cumulative_reward=round(self._state.total_reward, 3),
             task_name=self._config.name,
             max_steps=self._config.max_steps,

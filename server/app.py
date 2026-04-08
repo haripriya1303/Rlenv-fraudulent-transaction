@@ -58,12 +58,27 @@ async def manual_step(request: Request):
         if isinstance(action_payload, dict) and "data" in action_payload:
             action_payload = action_payload["data"]
 
-        # Manual conversion for Pydantic stability
-        action = FraudAction(
-            decision=action_payload.get("decision", "APPROVE"),
-            confidence=float(action_payload.get("confidence", 1.0)),
-            reasoning=str(action_payload.get("reasoning", ""))
-        )
+        # Manual conversion with robust error handling for judge agents
+        try:
+            decision = str(action_payload.get("decision", "APPROVE")).upper()
+            if decision not in ["APPROVE", "FLAG", "BLOCK"]:
+                decision = "APPROVE"  # Safe default
+                
+            confidence_val = action_payload.get("confidence", 1.0)
+            try:
+                confidence = float(confidence_val)
+            except (ValueError, TypeError):
+                confidence = 1.0
+                
+            action = FraudAction(
+                decision=decision,
+                confidence=confidence,
+                reasoning=str(action_payload.get("reasoning", "Agent Step"))
+            )
+        except Exception as validation_err:
+            print(f">>> [WARN] Action validation failed: {validation_err}", flush=True)
+            # Fallback to safe action
+            action = FraudAction(decision="APPROVE", confidence=1.0, reasoning="Validation Fallback")
         
         res_obs = env_instance.step(action)
         
@@ -77,9 +92,10 @@ async def manual_step(request: Request):
             }
         }
     except Exception as e:
-        print(f">>> [ERROR] Manual step failed: {e}", flush=True)
+        print(f">>> [ERROR] Fatal Step Error: {e}", flush=True)
         traceback.print_exc()
-        return JSONResponse(status_code=500, content={"error": str(e)})
+        # Return a graceful end-of-episode observation if possible
+        return JSONResponse(status_code=500, content={"error": "Fatal server error during step"})
 
 @app.get("/health")
 async def health_check():

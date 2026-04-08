@@ -10,14 +10,10 @@ import traceback
 from pathlib import Path
 from typing import List, Optional
 
-# ── CRITICAL: NO load_dotenv() here — validator injects env vars directly ──
-
 from openai import OpenAI
 from models import FraudAction, FraudObservation
 from client import FraudEnv
 from agent import FraudPolicy, extract_features, select_action
-
-
 
 try:
     import torch
@@ -26,7 +22,7 @@ except ImportError:
     torch = None
     TORCH_AVAILABLE = False
 
-# --- Load .env file for local development ---
+# --- Load .env file for local development ONLY (never overrides injected vars) ---
 def load_dotenv():
     env_path = Path(__file__).parent / ".env"
     if env_path.exists():
@@ -35,22 +31,22 @@ def load_dotenv():
             if not line or line.startswith("#") or "=" not in line:
                 continue
             key, value = line.split("=", 1)
-            os.environ[key.strip()] = value.strip().strip('"').strip("'")
+            key = key.strip()
+            value = value.strip().strip('"').strip("'")
+            # CRITICAL: only set if NOT already injected by validator
+            if key not in os.environ:
+                os.environ[key] = value
 
 load_dotenv()
+
 # ── Config ────────────────────────────────────────────────────────────────────
-# CHECKLIST Item 1: Environment variables present in inference.py
-# CHECKLIST Item 2: Defaults set only for API_BASE_URL and MODEL_NAME (not HF_TOKEN)
-API_BASE_URL = os.getenv("API_BASE_URL", "https://router.huggingface.co/v1")
-MODEL_NAME   = os.getenv("MODEL_NAME", "Qwen/Qwen2.5-72B-Instruct")
-HF_TOKEN     = os.getenv("HF_TOKEN")  # optional — NO default value
-
-# Optional — if you use from_docker_image():
+API_BASE_URL     = os.getenv("API_BASE_URL", "https://router.huggingface.co/v1")
+MODEL_NAME       = os.getenv("MODEL_NAME", "Qwen/Qwen2.5-72B-Instruct")
+HF_TOKEN         = os.getenv("HF_TOKEN")       # optional — NO default
 LOCAL_IMAGE_NAME = os.getenv("LOCAL_IMAGE_NAME")
-
-TASK_NAME = os.getenv("FRAUD_TASK", "medium")
-BENCHMARK = "openenv-fraud"
-MAX_STEPS = 50
+TASK_NAME        = os.getenv("FRAUD_TASK", "medium")
+BENCHMARK        = "openenv-fraud"
+MAX_STEPS        = 50
 SUCCESS_SCORE_THRESHOLD = 0.5
 
 # ── Prompts ───────────────────────────────────────────────────────────────────
@@ -93,18 +89,15 @@ Episode Context:
 # ── Logging helpers ───────────────────────────────────────────────────────────
 
 def log_start(task: str, env: str, model: str) -> None:
-    """R8: Must be the FIRST line of output."""
     print(f"[START] task={task} env={env} model={model}", flush=True)
 
 def log_step(step: int, action: str, reward: float, done: bool, error: Optional[str]) -> None:
-    """R1-R3: 2dp reward clamped [0,1], lowercase done, null error."""
     reported_reward = min(max(float(reward), 0.0), 1.0)
     done_val = str(bool(done)).lower()
     error_val = str(error) if (error and str(error).strip() not in ("None", "")) else "null"
     print(f"[STEP] step={step} action={action} reward={reported_reward:.2f} done={done_val} error={error_val}", flush=True)
 
 def log_end(success: bool, steps: int, score: float, rewards: List[float]) -> None:
-    """R4-R7: lowercase success, score= at 2dp, comma-sep rewards."""
     score = min(max(float(score), 0.0), 1.0)
     rewards_str = ",".join(f"{r:.2f}" for r in rewards)
     print(f"[END] success={str(bool(success)).lower()} steps={steps} score={score:.2f} rewards={rewards_str}", flush=True)
@@ -116,8 +109,6 @@ def get_hybrid_action(client: OpenAI, policy, obs: FraudObservation) -> FraudAct
     llm_decision = "APPROVE"
     reasoning = "N/A"
 
-    # CHECKLIST Item 3: All LLM calls use the OpenAI client configured via these variables
-    # ALWAYS call LLM through the proxy — validator monitors API calls on every step
     try:
         response = client.chat.completions.create(
             model=MODEL_NAME,
@@ -139,7 +130,6 @@ def get_hybrid_action(client: OpenAI, policy, obs: FraudObservation) -> FraudAct
         traceback.print_exc()
         llm_decision = "APPROVE"
 
-    # RL policy refines the LLM decision — LLM call already happened above
     if TORCH_AVAILABLE and policy is not None:
         try:
             action_str, confidence, _ = select_action(
@@ -156,19 +146,16 @@ def get_hybrid_action(client: OpenAI, policy, obs: FraudObservation) -> FraudAct
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def main() -> None:
-    # CHECKLIST Item 4: Stdout logs follow required structured format (START/STEP/END) exactly
     # R8: [START] MUST be the very first line of output
     log_start(task=TASK_NAME, env=BENCHMARK, model=MODEL_NAME)
 
-    # CHECKLIST Item 3: OpenAI client configured via API_BASE_URL and API_KEY
-    # Validator HOW TO FIX: base_url=os.environ["API_BASE_URL"], api_key=os.environ["API_KEY"]
-    # (Using .get with fallbacks to avoid local crashes)
+    # CRITICAL: use os.environ[] (not .get) so it fails loudly if validator didn't inject
     client = OpenAI(
-        base_url=os.environ.get("API_BASE_URL", API_BASE_URL),
-        api_key=os.environ.get("API_KEY", HF_TOKEN),
+        base_url=os.environ["API_BASE_URL"],
+        api_key=os.environ["API_KEY"],
     )
 
-    # ── Warm-up: make ONE real LLM call immediately so validator sees proxy traffic ──
+    # Warm-up: make ONE real LLM call so validator sees proxy traffic immediately
     try:
         warmup = client.chat.completions.create(
             model=MODEL_NAME,
@@ -240,7 +227,7 @@ def main() -> None:
             obs = step_res.observation if hasattr(step_res, "observation") else step_res
 
             raw_reward = float(getattr(step_res, "reward", 0.0) or 0.0)
-            normalized_reward = 1 / (1 + math.exp(-raw_reward))  # sigmoid normalization
+            normalized_reward = 1 / (1 + math.exp(-raw_reward))
             final_reward = min(max(normalized_reward, 0.0), 1.0)
 
             done = bool(getattr(step_res, "done", False) or False)

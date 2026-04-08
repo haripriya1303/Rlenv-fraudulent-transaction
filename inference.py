@@ -36,12 +36,13 @@ except ImportError:
     torch = None
 
 # ── Config ────────────────────────────────────────────────────────────────────
-API_BASE_URL = os.getenv("API_BASE_URL", "https://router.huggingface.co/v1")
-API_KEY      = os.getenv("API_KEY") or os.getenv("HF_TOKEN") or "dummy_token"
-MODEL_NAME   = os.getenv("MODEL_NAME", "Qwen/Qwen2.5-72B-Instruct")
+# STRICT COMPLIANCE: Use injected environment variables as requested by Hackathon dashboard.
+API_BASE_URL = os.environ.get("API_BASE_URL", "https://router.huggingface.co/v1")
+API_KEY      = os.environ.get("API_KEY") or os.environ.get("HF_TOKEN")
+MODEL_NAME   = os.environ.get("MODEL_NAME", "Qwen/Qwen2.5-72B-Instruct")
 
-if API_KEY == "dummy_token":
-    print("[DEBUG] WARNING: API_KEY is missing. LLM calls will fail.", flush=True)
+if not API_KEY:
+    print("[DEBUG] CRITICAL: API_KEY/HF_TOKEN missing. LLM calls will fail.", flush=True)
 
 TASK_NAME = os.getenv("FRAUD_TASK", "medium")
 BENCHMARK = "openenv-fraud"
@@ -99,12 +100,17 @@ def get_hybrid_action(client: OpenAI, policy: Optional[FraudPolicy], obs: FraudO
             messages=[{"role": "system", "content": SYSTEM_PROMPT}, {"role": "user", "content": user_prompt}],
             temperature=0.0,
             max_tokens=150,
-            response_format={"type": "json_object"},
         )
-        parsed = json.loads(response.choices[0].message.content)
+        content = response.choices[0].message.content
+        # Simple extraction logic for JSON in case the proxy doesn't handle JSON mode perfectly
+        if "{" in content:
+            content = content[content.find("{"):content.rfind("}")+1]
+        
+        parsed = json.loads(content)
         reasoning = str(parsed.get("reasoning", ""))
         llm_decision = str(parsed.get("decision", "APPROVE")).upper()
-    except Exception:
+    except Exception as e:
+        print(f"[DEBUG] LLM Call Error: {e}", flush=True)
         llm_decision = "APPROVE"
 
     if TORCH_AVAILABLE and policy is not None:

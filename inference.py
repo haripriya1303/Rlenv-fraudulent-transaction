@@ -20,10 +20,7 @@ import json
 import math
 import requests
 import traceback
-from dotenv import load_dotenv
 from typing import List, Optional
-
-load_dotenv()
 
 from openai import OpenAI
 from models import FraudAction, FraudObservation
@@ -42,11 +39,16 @@ MODEL_NAME   = os.getenv("MODEL_NAME", "Qwen/Qwen2.5-72B-Instruct")
 HF_TOKEN     = os.getenv("HF_TOKEN")
 API_KEY      = os.getenv("API_KEY")
 
-# Choose the active key (prioritize API_KEY from proxy if present)
-ACTIVE_API_KEY = API_KEY or HF_TOKEN
+
+ACTIVE_BASE_URL = os.environ.get("API_BASE_URL", API_BASE_URL)
+ACTIVE_API_KEY  = os.environ.get("API_KEY") or HF_TOKEN
+
+print(f">>> [CONFIG] Base URL: {ACTIVE_BASE_URL}", flush=True)
+print(f">>> [CONFIG] Model: {MODEL_NAME}", flush=True)
+print(f">>> [CONFIG] Credentials Found: {'Yes' if ACTIVE_API_KEY else 'No'}", flush=True)
 
 if not ACTIVE_API_KEY:
-    print("[DEBUG] CRITICAL: No API_KEY or HF_TOKEN found in environment.", flush=True)
+    print("[DEBUG] CRITICAL: No API_KEY or HF_TOKEN found. Evaluating without LLM help.", flush=True)
 
 TASK_NAME = os.getenv("FRAUD_TASK", "medium")
 BENCHMARK = "openenv-fraud"
@@ -129,7 +131,11 @@ def get_hybrid_action(client: OpenAI, policy: Optional[FraudPolicy], obs: FraudO
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def main() -> None:
-    client = OpenAI(base_url=API_BASE_URL, api_key=ACTIVE_API_KEY)
+
+    client = OpenAI(
+        base_url=os.environ["API_BASE_URL"],
+        api_key=os.environ["API_KEY"]
+    )
     env_url = os.getenv("ENV_BASE_URL", "http://localhost:8000")
     env = FraudEnv(base_url=env_url or "http://localhost:8000")
 

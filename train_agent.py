@@ -2,6 +2,7 @@ import os
 import torch
 import torch.nn as nn
 import torch.optim as optim
+import math
 import argparse
 import json
 from openai import OpenAI
@@ -87,16 +88,20 @@ def train(episodes: int = 500):
                 step_res = env_client.step(action)
                 obs = step_res.observation if hasattr(step_res, "observation") else step_res
                 
-                env_reward = getattr(step_res, "reward", 0.0)
-                reward = env_reward
+                # 3. Process Reward
+                env_reward = float(getattr(step_res, "reward", 0.0) or 0.0)
                 
-                # Internal Reward Shaping
+                # Apply Sigmoid Normalization (Consistency with inference.py)
+                normalized_reward = 1 / (1 + math.exp(-env_reward))
+                reward = round(normalized_reward, 4)
+                
+                # Internal Reward Shaping: Strategic bonus for catching fraud near quotas
                 if obs.block_rate_so_far > 0.20 and env_reward > 0:
-                    reward += 0.2 
+                    reward += 0.15 
                 
                 log_probs.append(log_prob)
                 rewards.append(reward)
-                done = getattr(step_res, "done", False)
+                done = bool(getattr(step_res, "done", False) or False)
                 
             # --- POLICY UPDATE ---
             returns = []

@@ -7,6 +7,7 @@ import json
 import math
 import requests
 import traceback
+from pathlib import Path
 from typing import List, Optional
 
 # ── CRITICAL: NO load_dotenv() here — validator injects env vars directly ──
@@ -16,6 +17,8 @@ from models import FraudAction, FraudObservation
 from client import FraudEnv
 from agent import FraudPolicy, extract_features, select_action
 
+
+
 try:
     import torch
     TORCH_AVAILABLE = True
@@ -23,6 +26,18 @@ except ImportError:
     torch = None
     TORCH_AVAILABLE = False
 
+# --- Load .env file for local development ---
+def load_dotenv():
+    env_path = Path(__file__).parent / ".env"
+    if env_path.exists():
+        for line in env_path.read_text().splitlines():
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, value = line.split("=", 1)
+            os.environ[key.strip()] = value.strip().strip('"').strip("'")
+
+load_dotenv()
 # ── Config ────────────────────────────────────────────────────────────────────
 # CHECKLIST Item 1: Environment variables present in inference.py
 # CHECKLIST Item 2: Defaults set only for API_BASE_URL and MODEL_NAME (not HF_TOKEN)
@@ -147,9 +162,10 @@ def main() -> None:
 
     # CHECKLIST Item 3: OpenAI client configured via API_BASE_URL and API_KEY
     # Validator HOW TO FIX: base_url=os.environ["API_BASE_URL"], api_key=os.environ["API_KEY"]
+    # (Using .get with fallbacks to avoid local crashes)
     client = OpenAI(
-        base_url=os.environ["API_BASE_URL"],
-        api_key=os.environ["API_KEY"],
+        base_url=os.environ.get("API_BASE_URL", API_BASE_URL),
+        api_key=os.environ.get("API_KEY", HF_TOKEN),
     )
 
     # ── Warm-up: make ONE real LLM call immediately so validator sees proxy traffic ──

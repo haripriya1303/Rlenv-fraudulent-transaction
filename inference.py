@@ -1,18 +1,7 @@
 """
 inference.py — OpenEnv-compliant hybrid RL+LLM fraud detection agent.
-ROBUST VERSION: Handles missing torch gracefully by falling back to zero-shot LLM.
-UPGRADED: Dual reward system (Raw / Normalized / Clamped) for enhanced learning signals.
-
-Compliance (9 rules enforced):
-  R1 [STEP] reward: 2dp, clamped [0.0, 1.0]
-  R2 [STEP] done:   lowercase "true"/"false"
-  R3 [STEP] error:  "null" or string
-  R4 [END]  success: lowercase "true"/"false"
-  R5 [END]  always logs via finally block
-  R6 [END]  rewards: comma-sep, each 2dp
-  R7 [END]  score= field, 2dp, clamped [0.0, 1.0]
-  R8 [START] is printed FIRST (before env.reset)
-  R9 Load agent_weights_best.pth if exists, fallback to agent_weights.pth
+FIXED: Removed load_dotenv(), fixed API_KEY to use injected credentials,
+       fixed [START] log order per R8.
 """
 
 import os
@@ -22,33 +11,29 @@ import requests
 import traceback
 from typing import List, Optional
 
+# ── CRITICAL: NO load_dotenv() here — validator injects env vars directly ──
+
 from openai import OpenAI
 from models import FraudAction, FraudObservation
 from client import FraudEnv
-from agent import FraudPolicy, extract_features, select_action, TORCH_AVAILABLE
+from agent import FraudPolicy, extract_features, select_action
 
 try:
     import torch
+    TORCH_AVAILABLE = True
 except ImportError:
     torch = None
+    TORCH_AVAILABLE = False
 
 # ── Config ────────────────────────────────────────────────────────────────────
-# PRE-SUBMISSION CHECKLIST COMPLIANCE
+# CHECKLIST COMPLIANT:
+#   - API_BASE_URL: os.getenv with default fallback (NOT hardcoded)
+#   - MODEL_NAME:   os.getenv with default fallback
+#   - HF_TOKEN:     optional, never used as API_KEY
+#   - API_KEY:      ONLY from injected os.environ["API_KEY"]
 API_BASE_URL = os.getenv("API_BASE_URL", "https://router.huggingface.co/v1")
 MODEL_NAME   = os.getenv("MODEL_NAME", "Qwen/Qwen2.5-72B-Instruct")
-HF_TOKEN     = os.getenv("HF_TOKEN")
-API_KEY      = os.getenv("API_KEY")
-
-
-ACTIVE_BASE_URL = os.environ.get("API_BASE_URL", API_BASE_URL)
-ACTIVE_API_KEY  = os.environ.get("API_KEY") or HF_TOKEN
-
-print(f">>> [CONFIG] Base URL: {ACTIVE_BASE_URL}", flush=True)
-print(f">>> [CONFIG] Model: {MODEL_NAME}", flush=True)
-print(f">>> [CONFIG] Credentials Found: {'Yes' if ACTIVE_API_KEY else 'No'}", flush=True)
-
-if not ACTIVE_API_KEY:
-    print("[DEBUG] CRITICAL: No API_KEY or HF_TOKEN found. Evaluating without LLM help.", flush=True)
+HF_TOKEN     = os.getenv("HF_TOKEN")  # optional, NOT used as API_KEY
 
 TASK_NAME = os.getenv("FRAUD_TASK", "medium")
 BENCHMARK = "openenv-fraud"
@@ -57,45 +42,63 @@ SUCCESS_SCORE_THRESHOLD = 0.5
 
 # ── Prompts ───────────────────────────────────────────────────────────────────
 SYSTEM_PROMPT = """You are an expert banking fraud analyst reviewing transactions in real time.
-You MUST respond ONLY with valid JSON: {"decision": "APPROVE"|"FLAG"|"BLOCK", "confidence": <float>, "reasoning": "..."}
+Your task is to classify each transaction as exactly one of:
+- APPROVE: Transaction appears legitimate. Allow it.
+- FLAG: Transaction is suspicious. Send for human review.
+- BLOCK: Transaction is high-confidence fraud. Reject immediately.
+
+Guidelines:
+- BLOCK only when you have strong multi-signal evidence of fraud.
+- FLAG when signals are mixed or moderate risk.
+- APPROVE clearly legitimate transactions to maintain customer experience.
+- Systematic over-blocking will incur operational penalties.
+
+You MUST respond ONLY with a valid JSON object:
+{"decision": "APPROVE"|"FLAG"|"BLOCK", "confidence": <float>, "reasoning": "<brief explanation>"}
 """
 
-TRANSACTION_TEMPLATE = """Review this:
+TRANSACTION_TEMPLATE = """Review this transaction and decide: APPROVE, FLAG, or BLOCK.
+
+Transaction Details:
   - ID:           {transaction_id}
-  - Amount:       ${amount:.2f}
-  - Velocity:     {transaction_velocity}
-  - Risk scores:  Geo={geo_risk_score:.2f}, Merchant={merchant_risk_score:.2f}
+  - Amount:       ${amount:.2f} (z-score: {amount_zscore:+.2f} vs user baseline)
+  - Country:      {country} (geo risk score: {geo_risk_score:.2f})
+  - Merchant:     {merchant_type} (merchant risk: {merchant_risk_score:.2f})
+  - Device:       {device_type} (consistency: {device_consistency:.2f})
+  - User age:     {user_age} years
+  - Velocity:     {transaction_velocity} transactions in last 24h
+  - Night tx:     {is_night}
+  - Account age:  {account_age_days} days
+
+Episode Context:
+  - Step:              {step}/{max_steps}
+  - Fraud rate so far: {fraud_rate_so_far:.1%}
+  - Block rate so far: {block_rate_so_far:.1%}
+  - Cumulative reward: {cumulative_reward:.3f}
 """
 
-# ── Logging helpers (Rule compliance) ───────────────────────────────
+# ── Logging helpers ───────────────────────────────────────────────────────────
 
 def log_start(task: str, env: str, model: str) -> None:
-    """R8: First line of output."""
+    """R8: Must be the FIRST line of output."""
     print(f"[START] task={task} env={env} model={model}", flush=True)
 
-def log_step(step: int, action: str, final_reward: float, done: bool, error: Optional[str]) -> None:
-    """
-    R1-R3: 2dp reward, lowercase done, null error. 
-    Using final_reward (clamped) for OpenEnv compliance.
-    """
-    reported_reward = min(max(float(final_reward), 0.0), 1.0)
+def log_step(step: int, action: str, reward: float, done: bool, error: Optional[str]) -> None:
+    """R1-R3: 2dp reward clamped [0,1], lowercase done, null error."""
+    reported_reward = min(max(float(reward), 0.0), 1.0)
     done_val = str(bool(done)).lower()
-    error_val = str(error) if (error and str(error).strip() != "None") else "null"
+    error_val = str(error) if (error and str(error).strip() not in ("None", "")) else "null"
     print(f"[STEP] step={step} action={action} reward={reported_reward:.2f} done={done_val} error={error_val}", flush=True)
 
 def log_end(success: bool, steps: int, score: float, rewards: List[float]) -> None:
-    """
-    R4-R7: lowercase success, score= present at 2dp, comma-sep rewards.
-    The rewards list contains final_clamped rewards for public reporting.
-    """
+    """R4-R7: lowercase success, score= at 2dp, comma-sep rewards."""
     score = min(max(float(score), 0.0), 1.0)
-    success_val = str(bool(success)).lower()
     rewards_str = ",".join(f"{r:.2f}" for r in rewards)
-    print(f"[END] success={success_val} steps={steps} score={score:.2f} rewards={rewards_str}", flush=True)
+    print(f"[END] success={str(bool(success)).lower()} steps={steps} score={score:.2f} rewards={rewards_str}", flush=True)
 
 # ── Action selection ──────────────────────────────────────────────────────────
 
-def get_hybrid_action(client: OpenAI, policy: Optional[FraudPolicy], obs: FraudObservation) -> FraudAction:
+def get_hybrid_action(client: OpenAI, policy, obs: FraudObservation) -> FraudAction:
     user_prompt = TRANSACTION_TEMPLATE.format(**obs.__dict__)
     llm_decision = "APPROVE"
     reasoning = "N/A"
@@ -103,76 +106,86 @@ def get_hybrid_action(client: OpenAI, policy: Optional[FraudPolicy], obs: FraudO
     try:
         response = client.chat.completions.create(
             model=MODEL_NAME,
-            messages=[{"role": "system", "content": SYSTEM_PROMPT}, {"role": "user", "content": user_prompt}],
+            messages=[
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": user_prompt},
+            ],
             temperature=0.0,
             max_tokens=150,
         )
         content = response.choices[0].message.content
-        # Simple extraction logic for JSON in case the proxy doesn't handle JSON mode perfectly
         if "{" in content:
             content = content[content.find("{"):content.rfind("}")+1]
-        
         parsed = json.loads(content)
         reasoning = str(parsed.get("reasoning", ""))
         llm_decision = str(parsed.get("decision", "APPROVE")).upper()
     except Exception as e:
-        print(f"[DEBUG] LLM Call Error: {e}", flush=True)
+        print(f"[DEBUG] LLM error: {e}", flush=True)
         llm_decision = "APPROVE"
 
     if TORCH_AVAILABLE and policy is not None:
         try:
-            action_str, confidence, _ = select_action(policy, obs, llm_decision=llm_decision, deterministic=True)
-            return FraudAction(decision=action_str, confidence=float(confidence), reasoning=f"[Hybrid] {reasoning}")
+            action_str, confidence, _ = select_action(
+                policy, obs, llm_decision=llm_decision, deterministic=True
+            )
+            return FraudAction(decision=action_str, confidence=float(confidence), reasoning=f"[Fusion] {reasoning}")
         except Exception as e:
             return FraudAction(decision=llm_decision, confidence=0.5, reasoning=f"[Fallback] {reasoning} err={e}")
 
-    return FraudAction(decision=llm_decision, confidence=0.5, reasoning=f"[Zero-Shot] {reasoning}")
+    return FraudAction(decision=llm_decision, confidence=0.5, reasoning=f"[LLM] {reasoning}")
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def main() -> None:
+    # R8: [START] MUST be printed before anything else, including env.reset()
+    log_start(task=TASK_NAME, env=BENCHMARK, model=MODEL_NAME)
 
+    # CHECKLIST: OpenAI client uses ONLY injected API_BASE_URL and API_KEY
+    # Do NOT fall back to HF_TOKEN here — validator checks calls on API_KEY
     client = OpenAI(
         base_url=os.environ["API_BASE_URL"],
-        api_key=os.environ["API_KEY"]
+        api_key=os.environ["API_KEY"],
     )
-    env_url = os.getenv("ENV_BASE_URL", "http://localhost:8000")
-    env = FraudEnv(base_url=env_url or "http://localhost:8000")
 
-    # DUAL REWARD STORAGE
-    rewards: List[float] = []      # public (clamped 0.0-1.0)
-    raw_rewards: List[float] = []  # internal (raw env output)
-    
+    env_url = os.getenv("ENV_BASE_URL", "http://localhost:8000")
+    env = FraudEnv(base_url=env_url)
+
+    rewards: List[float] = []
+    raw_rewards: List[float] = []
     steps_taken = 0
     score = 0.0
     success = False
 
-    log_start(task=TASK_NAME, env=BENCHMARK, model=MODEL_NAME)
-
-    policy: Optional[FraudPolicy] = None
+    # Load policy
+    policy = None
     if TORCH_AVAILABLE:
         try:
             sample_res = env.reset()
             sample_obs = sample_res.observation if hasattr(sample_res, "observation") else sample_res
-            policy = FraudPolicy(input_dim=19)
-            
+            input_dim = extract_features(sample_obs).shape[-1]
+            policy = FraudPolicy(input_dim=input_dim)
+
             best_path = "agent_weights_best.pth"
-            final_path = "agent_weights.pth"
-            weights_path = best_path if os.path.exists(best_path) else final_path
-            
+            fallback_path = "agent_weights.pth"
+            weights_path = best_path if os.path.exists(best_path) else fallback_path
+
             if os.path.exists(weights_path):
                 state_dict = torch.load(weights_path, map_location="cpu")
-                policy.load_state_dict(state_dict)
-                policy.eval()
-                print(f"[DEBUG] Loaded {weights_path}", flush=True)
+                if state_dict["input_layer.weight"].shape[1] == input_dim:
+                    policy.load_state_dict(state_dict)
+                    policy.eval()
+                    print(f"[DEBUG] Loaded weights from {weights_path}", flush=True)
+                else:
+                    print("[DEBUG] Weight dimension mismatch, using zero-shot.", flush=True)
+                    policy = None
             else:
-                print("[DEBUG] No weights found, Using zero-shot policy.", flush=True)
+                print("[DEBUG] No weights found, using zero-shot.", flush=True)
                 policy = None
         except Exception as e:
-            print(f"[DEBUG] Weight load failure: {e}", flush=True)
+            print(f"[DEBUG] Policy load error: {e}", flush=True)
             policy = None
     else:
-        print("[DEBUG] Torch not available. Running in LLM mode.", flush=True)
+        print("[DEBUG] Torch unavailable. LLM-only mode.", flush=True)
 
     try:
         result = env.reset()
@@ -188,32 +201,24 @@ def main() -> None:
 
             step_res = env.step(action)
             obs = step_res.observation if hasattr(step_res, "observation") else step_res
-            
-            # 1. RAW REWARD: Directly from environment
+
             raw_reward = float(getattr(step_res, "reward", 0.0) or 0.0)
-            
-            # 2. NORMALIZED REWARD: Internal value using Sigmoid scaling for stable learning gradients.
-            # Normalization maps (-inf, inf) to (0, 1), preserving the agent's relative performance signal.
+            # Sigmoid normalization for stable gradients, then clamp for OpenEnv compliance
             normalized_reward = 1 / (1 + math.exp(-raw_reward))
-            
-            # 3. FINAL REWARD: Clamped [0.0, 1.0] to satisfy strict OpenEnv logging constraints.
-            # Clamping is required to avoid validator rejection but preserves the normalized mean.
             final_reward = min(max(normalized_reward, 0.0), 1.0)
-            
+
             done = bool(getattr(step_res, "done", False) or False)
-            
             raw_rewards.append(raw_reward)
             rewards.append(final_reward)
             steps_taken = step
-            
-            log_step(step=step, action=action.decision, final_reward=final_reward, done=done, error=error_str)
+
+            log_step(step=step, action=action.decision, reward=final_reward, done=done, error=error_str)
 
             if done:
                 try:
                     resp = requests.get(f"{env_url}/grade", timeout=5).json()
-                    # OpenEnv compliance: Score must be derived from public final_rewards mean if missing
                     remote_score = resp.get("score")
-                    score = float(remote_score) if remote_score is not None else sum(rewards)/len(rewards)
+                    score = float(remote_score) if remote_score is not None else sum(rewards) / len(rewards)
                 except Exception:
                     score = sum(rewards) / len(rewards) if rewards else 0.0
                 break
@@ -226,7 +231,7 @@ def main() -> None:
         traceback.print_exc()
         success = False
         steps_taken = len(rewards)
-        score = sum(rewards)/len(rewards) if rewards else 0.0
+        score = sum(rewards) / len(rewards) if rewards else 0.0
     finally:
         log_end(success=success, steps=steps_taken, score=score, rewards=rewards)
 

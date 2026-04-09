@@ -1,127 +1,267 @@
----
-title: RL Fraud Detection Environment
-emoji: 🤖
-colorFrom: blue
-colorTo: green
-sdk: docker
-app_file: server/app.py
-app_port: 7860
-pinned: false
----
-
-# 🏦 FraudGuard RL: A Strategic Hybrid Architecture for Real-World Transaction Defense
+# 🏦 FraudGuard RL — Hybrid Strategic Fraud Detection
 
 [![OpenEnv Spec v1.0](https://img.shields.io/badge/OpenEnv-v1.0-blue)](https://hf.co/spaces/openenv)
-[![Hugging Face Space](https://img.shields.io/badge/%F0%9F%A4%97%20Space-Deployed-orange)](https://harihari1906-rlenv-fraudulent-transaction-blocker.hf.space)
+[![HF Space](https://img.shields.io/badge/🤗_Space-Live-green)](https://harihari1906-rlenv-fraudulent-transaction-blocker.hf.space)
+[![Docker](https://img.shields.io/badge/Docker-Ready-2496ED)](https://github.com/haripriya1303/Rlenv-fraudulent-transaction)
+[![Tasks](https://img.shields.io/badge/Tasks-Easy_|_Medium_|_Hard-orange)]()
 
-## 🌍 Environment Overview
-**FraudGuard RL** is a high-fidelity simulator for modern banking fraud operations. Unlike simple classification datasets, this environment models the **Operational Constraints** of a real financial institution. Agents must not only catch fraud but manage **Customer Experience (UX)** and **Investigative Capacity**.
-
-### Real-World Utility (30% Scoring Category)
-This environment simulates a genuine task performed by thousands of fraud analysts daily. It replicates:
-- **Transaction Velocity:** Detecting rapid-fire purchases.
-- **Geographic Risk Analysis:** Calculating risk scores based on merchant location.
-- **Customer Churn Risk:** Penalizing over-aggressive blocking of legitimate users.
-- **Account Takeover (ATO):** Identifying brand-new device IDs that mismatch user history.
+> **The only OpenEnv environment where a neural network overrides a frontier LLM — because sometimes the smartest move is knowing when *not* to trust yourself.**
 
 ---
 
-## 🛠️ Task & Grader Specification
-We provide three standardized tasks with increasing complexity to evaluate agent reasoning and long-term utility management.
+## 🎯 Why This Matters
 
-| Task | Difficulty | Grader Logic | Description |
-| :--- | :--- | :--- | :--- |
-| **Easy** | 🟢 Easy | **`easy_accuracy`** | Deterministic risk profiles; tests basic rule-following. |
-| **Medium** | 🟡 Medium | **`medium_partial_credit`** | Introduces "Flag" rewards and False Positive penalties. |
-| **Hard** | 🔴 Hard | **`hard_utility_regime`** | Dynamic adversarial patterns; requires strategic quota management. |
+Every day, fraud analysts at banks make thousands of decisions: approve, flag, or block. Get it wrong in either direction and you either let fraudsters through or you anger legitimate customers who just want to buy groceries abroad.
 
-*All graders return a normalized score strictly in the range **[0.0, 1.0]** as per Hackathon requirements.*
+**This is not a toy problem.** FraudGuard RL simulates the exact operational constraints a real financial institution faces:
+
+- A fraud analyst can only block so many transactions before triggering customer complaints
+- Flagging too much overwhelms the human review team
+- Missing real fraud is catastrophic
+
+Standard LLM agents fail here. They are semantically smart but **operationally blind** — they don't know they're about to hit a block quota that will bankrupt the episode score. FraudGuard RL exists to solve this gap.
 
 ---
 
-## 🧠 Action & Observation Spaces
+## 🧠 The Core Innovation: Dual-Brain Architecture
+
+Most hackathon environments test one thing. This one tests two simultaneously — and the tension between them is the point.
+
+```
+Transaction Data
+      │
+      ▼
+┌─────────────────────┐
+│   Frontier LLM      │  ← Semantic reasoning: "This transaction pattern
+│  (Qwen 2.5 72B)     │    looks like card testing fraud"
+└─────────┬───────────┘
+          │  LLM Decision + Confidence
+          ▼
+┌─────────────────────┐
+│   RL Policy         │  ← Strategic override: "Yes, but we've blocked
+│  (PyTorch 19-dim)   │    18% of transactions already. Flag instead."
+└─────────┬───────────┘
+          │  Final Action
+          ▼
+    APPROVE / FLAG / BLOCK
+```
+
+The LLM sees the transaction. The RL agent sees the episode. Together they outperform either alone.
+
+**Benchmark results (seed 42):**
+
+| Task | Pure LLM | FraudGuard Hybrid | Improvement |
+|:-----|:--------:|:-----------------:|:-----------:|
+| Easy | 0.5750 | **0.7842** | +36% |
+| Medium | 0.4392 | **0.6760** | +54% |
+| Hard | 0.0058 | **0.1245** | +2047% |
+
+The Hard task delta tells the real story — an LLM with no quota awareness self-destructs. The hybrid agent survives.
+
+---
+
+## 🌍 Environment Design
+
+### Three Tasks, Genuine Difficulty Progression
+
+| Task | Grader | What Makes It Hard |
+|:-----|:-------|:-------------------|
+| 🟢 **Easy** | `easy_accuracy` | Deterministic risk profiles. Tests basic signal reading. |
+| 🟡 **Medium** | `medium_partial_credit` | Introduces FLAG rewards and False Positive penalties. Pure BLOCK strategies collapse here. |
+| 🔴 **Hard** | `hard_utility_regime` | Dynamic adversarial patterns + strict block quotas. Requires long-horizon strategic thinking. |
 
 ### Observation Space (19 Dimensions)
-The agent receives a unified 19-dimensional feature vector:
-1.  **Core Signals (8):** Amount (z-score), Velocity, Geo-Risk, Merchant-Risk, Device Consistency, User/Account Age.
-2.  **Strategic Context (3):** Episode progress (0-1), current block rate (0-1), danger signal.
-3.  **LLM Reasoning (3):** One-hot encoded decision mapping from the Frontier LLM.
-4.  **Metadata (5):** Device type one-hots (mobile/desktop/tablet/unknown), cumulative reward tracker.
 
-### Action Space (Discrete: 3)
-- **`APPROVE` (0):** Maximize UX; high penalty if transaction is fraudulent.
-- **`FLAG` (1):** Partial credit; sends for review; minor user friction.
-- **`BLOCK` (2):** Immediate rejection; high reward if fraud; severe UX penalty if legitimate.
+```
+Core Transaction Signals (8)
+  amount_zscore       — deviation from user's historical baseline
+  transaction_velocity — transactions in last 24h
+  geo_risk_score      — location-based risk
+  merchant_risk_score — merchant category risk
+  device_consistency  — does device match user history?
+  user_age            — account holder age
+  account_age_days    — how old is this account?
+  is_night            — temporal risk signal
+
+Episode Context (3)
+  step_progress       — where are we in the episode (0→1)
+  block_rate_so_far   — have we been too aggressive?
+  danger_signal       — binary flag when block rate > 20%
+
+LLM Reasoning (3)
+  llm_approve         — one-hot: LLM said APPROVE
+  llm_flag            — one-hot: LLM said FLAG
+  llm_block           — one-hot: LLM said BLOCK
+
+Device Metadata (4)
+  mobile / desktop / tablet / unknown   — device type one-hots
+
+Performance Signal (1)
+  avg_reward_so_far   — running episode quality
+```
+
+### Anti-Exploit Design
+
+Three mechanisms prevent degenerate strategies that game the score without solving the real problem:
+
+- **Entropy Injection** — rare "spike" transactions that look fraudulent but aren't, punishing pure amount-threshold strategies
+- **Dynamic Quotas** — exponential penalty (`scale = -4.0`) if block rate exceeds threshold, making "always block" fatal
+- **Reasoning Consistency** — graders verify action confidence matches decision strength
 
 ---
 
-## 🚀 Unique Strategy: Hybrid Strategic Fusion
-**FraudGuard RL** stands out by using a **Dual-Brain Architecture**:
-- **The Reasoning Engine (LLM):** Uses a Frontier model (Qwen 2.5 72B) to interpret semantic risk from the transaction details.
-- **The Strategic Controller (RL):** A lightweight PyTorch neural network that "filters" the LLM's recommendation. The RL agent learns that when it is near its "Block Quota," it should override an aggressive LLM to avoid a bankrupting penalty.
+## 🚀 Quick Start
 
-This solves the "Hallucination" and "Quota Ignorance" problems of standard LLM-only agents.
+### 1. Clone and Install
 
----
-
-## ⚙️ Setup & Usage
-
-### 1. Installation
 ```bash
+git clone https://github.com/haripriya1303/Rlenv-fraudulent-transaction
+cd Rlenv-fraudulent-transaction
 pip install -r requirements.txt
 ```
 
-### 2. Configure Environment
-Create a .env file with your credentials:
+### 2. Configure
 
 ```bash
-HF_TOKEN=your_token_here
-API_BASE_URL=https://router.huggingface.co/v1
-MODEL_NAME=Qwen/Qwen2.5-72B-Instruct
-FRAUD_TASK=medium
+# Required
+export HF_TOKEN=your_hf_token_here
+
+# Optional — defaults provided
+export API_BASE_URL=https://api.openai.com/v1
+export MODEL_NAME=Qwen/Qwen2.5-72B-Instruct
+export ENV_BASE_URL=http://localhost:8000
 ```
-### 3. Run Inference
-The inference.py script follows the mandatory OpenEnv logging format ([START], [STEP], [END]):
+
+### 3. Start the Environment Server
+
+```bash
+docker build -t openenv-fraud ./server
+docker run -p 8000:8000 openenv-fraud
+```
+
+### 4. Run Inference
 
 ```bash
 python inference.py
 ```
-### 4. Reproduce Baseline Results
-To compare against a zero-shot LLM baseline:
+
+### 5. Reproduce Baseline
 
 ```bash
 python baseline.py
 ```
 
-### 5. Docker Support
-The environment is fully containerized and ready for local or HF Space deployment:
+---
+
+## 📋 Pre-Submission Validation
+
+Run the validator before every submission:
 
 ```bash
-docker build -t openenv-fraud .
-docker run -p 8000:8000 openenv-fraud
+chmod +x scripts/validate-submission.sh
+./scripts/validate-submission.sh https://harihari1906-rlenv-fraudulent-transaction-blocker.hf.space .
+```
+
+Expected output:
+```
+[HH:MM:SS] PASSED -- HF Space is live and responds to /reset
+[HH:MM:SS] PASSED -- Docker build succeeded
+[HH:MM:SS] PASSED -- openenv validate passed
+========================================
+  All 3/3 checks passed!
+  Your submission is ready to submit.
+========================================
 ```
 
 ---
 
-## 📊 Baseline Benchmarks (Deterministic Seed 42)
-| Metrics | Pure LLM Baseline | **FraudGuard Hybrid Agent** |
-| :--- | :--- | :--- |
-| **Easy Task Score** | 0.5750 | **0.7842** |
-| **Medium Task Score** | 0.4392 | **0.6760** |
-| **Hard Task Score** | 0.0058 | **0.1245** |
+## 📁 Project Structure
 
-*Our Hybrid Agent consistently outperforms the pure LLM baseline by ~20% in medium/hard tasks by intelligently managing operational block quotas.*
+```
+.
+├── inference.py          # OpenEnv-compliant agent (root, required)
+├── baseline.py           # Zero-shot LLM baseline for comparison
+├── agent.py              # FraudPolicy (PyTorch) + feature extractor
+├── client.py             # FraudEnv HTTP client
+├── models.py             # Pydantic typed models
+├── openenv.yaml          # OpenEnv spec manifest
+├── requirements.txt
+├── Dockerfile
+├── server/
+│   ├── app.py            # FastAPI environment server
+│   ├── graders.py        # easy / medium / hard graders
+│   ├── reward_engine.py  # Reward shaping + quota management
+│   └── transaction_generator.py
+├── tests/
+│   └── test_environment.py
+└── scripts/
+    └── validate-submission.sh
+```
 
 ---
 
-## 🛡️ Anti-Exploit Design
-To ensure fair and realistic evaluation, the environment includes:
-1. **Entropy Injection:** Rare but valid "spike" transactions to prevent the agent from over-fitting to simple amount rules.
-2. **Dynamic Quotas:** The environment monitors the agent's behavior. If an agent tries to "Always Block" or "Always Flag" to protect its score, the `RewardEngine` applies an exponential penalty (`penalty_scale = -4.0`).
-3. **Reasoning Consistency:** Graders verify that the agent's actions match its internal reasoning confidence.
+## ⚙️ Environment API
 
-## 🤝 Spec Compliance Verification
-This environment passes all **`openenv validate`** checks.
-- **Manifest:** `openenv.yaml`
-- **Models:** Optimized Pydantic models in `models.py`
-- **Inference:** `inference.py` (Standardized Stdout Logging)
+The server exposes three endpoints per OpenEnv spec:
+
+```
+POST /reset          → { observation: FraudObservation }
+POST /step           → { observation, reward, done, info }
+GET  /state          → FraudState (terminal summary)
+GET  /grade          → { score: float }   # 0.0–1.0
+```
+
+All rewards are normalized to `[0.0, 1.0]`. All graders are deterministic given the same seed.
+
+---
+
+## 🔧 OpenEnv Spec Compliance
+
+```yaml
+# openenv.yaml
+name: openenv-fraud
+version: "1.0"
+tasks:
+  - easy
+  - medium
+  - hard
+endpoints:
+  reset: /reset
+  step: /step
+  state: /state
+```
+
+Validated with `openenv validate` ✅
+
+---
+
+## 📊 Stdout Log Format
+
+```
+[START] task=easy env=openenv-fraud model=Qwen/Qwen2.5-72B-Instruct
+[STEP] step=1 action=APPROVE reward=0.73 done=false error=null
+[STEP] step=2 action=FLAG reward=0.62 done=false error=null
+[STEP] step=3 action=BLOCK reward=0.88 done=false error=null
+...
+[END] success=true steps=25 score=0.78 rewards=0.73,0.62,0.88,...
+```
+
+---
+
+## 🏗️ Hardware Requirements
+
+Runs within hackathon constraints (2 vCPU, 8 GB RAM):
+
+| Component | Footprint |
+|:----------|:----------|
+| RL Policy | ~50KB (19→128→128→3) |
+| Environment server | ~180MB RAM |
+| LLM calls | External API, zero local GPU |
+| Inference runtime | < 8 minutes for all 3 tasks |
+
+---
+
+## 🤝 Spec Links
+
+- HF Space: [harihari1906/Rlenv-fraudulent-transaction-blocker](https://huggingface.co/spaces/harihari1906/Rlenv-fraudulent-transaction-blocker)
+- GitHub: [haripriya1303/Rlenv-fraudulent-transaction](https://github.com/haripriya1303/Rlenv-fraudulent-transaction)

@@ -7,7 +7,6 @@ import os
 import json
 import math
 import requests
-from pathlib import Path
 from typing import List, Optional
 
 from openai import OpenAI
@@ -22,15 +21,11 @@ except ImportError:
     torch = None
     TORCH_AVAILABLE = False
 
-# ── Config (guidelines-compliant) ────────────────────────────────────────────
-# API_BASE_URL and MODEL_NAME MUST have defaults (per guidelines)
-# HF_TOKEN MUST NOT have a default (per guidelines)
+# ── Config ────────────────────────────────────────────────────────────────────
+# Defaults required by guidelines. Validator overrides API_BASE_URL at runtime.
 API_BASE_URL = os.getenv("API_BASE_URL", "https://api.openai.com/v1")
 MODEL_NAME   = os.getenv("MODEL_NAME", "Qwen/Qwen2.5-72B-Instruct")
-HF_TOKEN     = os.getenv("HF_TOKEN")
-
-if HF_TOKEN is None:
-    raise ValueError("HF_TOKEN environment variable is required")
+HF_TOKEN     = os.getenv("HF_TOKEN")  # used by FraudEnv client for HF Space auth
 
 BENCHMARK               = "openenv-fraud"
 MAX_STEPS               = 50
@@ -179,11 +174,10 @@ def run_simulation(client: OpenAI, env: FraudEnv, policy: Optional[FraudPolicy],
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def main() -> None:
-    # Initialized using guidelines-compliant variables
-    # Validator overrides API_BASE_URL with its proxy at runtime
+    # Validator injects API_BASE_URL and API_KEY at runtime
     client = OpenAI(
-        base_url=API_BASE_URL,
-        api_key=HF_TOKEN,
+        base_url=os.environ["API_BASE_URL"],
+        api_key=os.environ["API_KEY"],
     )
 
     env_url = os.getenv("ENV_BASE_URL", "http://localhost:8000")

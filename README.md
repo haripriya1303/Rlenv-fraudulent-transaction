@@ -1,3 +1,15 @@
+---
+title: RL Fraud Detection Environment
+emoji: 🏦
+colorFrom: blue
+colorTo: green
+sdk: docker
+app_file: server/app.py
+app_port: 7860
+pinned: false
+---
+
+
 # 🏦 FraudGuard RL — Hybrid Strategic Fraud Detection
 
 [![OpenEnv Spec v1.0](https://img.shields.io/badge/OpenEnv-v1.0-blue)](https://hf.co/spaces/openenv)

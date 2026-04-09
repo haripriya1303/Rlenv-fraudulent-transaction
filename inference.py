@@ -7,7 +7,6 @@ import os
 import json
 import math
 import requests
-import traceback
 from pathlib import Path
 from typing import List, Optional
 
@@ -23,31 +22,18 @@ except ImportError:
     torch = None
     TORCH_AVAILABLE = False
 
-# --- Load .env file for local development ---
-def load_dotenv():
-    env_path = Path(__file__).parent / ".env"
-    if env_path.exists():
-        for line in env_path.read_text().splitlines():
-            line = line.strip()
-            if not line or line.startswith("#") or "=" not in line:
-                continue
-            try:
-                key, value = line.split("=", 1)
-                key = key.strip()
-                value = value.strip().strip('"').strip("'")
-                if key not in os.environ:
-                    os.environ[key] = value
-            except Exception:
-                continue
+# ── Config (guidelines-compliant) ────────────────────────────────────────────
+# API_BASE_URL and MODEL_NAME MUST have defaults (per guidelines)
+# HF_TOKEN MUST NOT have a default (per guidelines)
+API_BASE_URL = os.getenv("API_BASE_URL", "https://api.openai.com/v1")
+MODEL_NAME   = os.getenv("MODEL_NAME", "Qwen/Qwen2.5-72B-Instruct")
+HF_TOKEN     = os.getenv("HF_TOKEN")
 
-load_dotenv()
+if HF_TOKEN is None:
+    raise ValueError("HF_TOKEN environment variable is required")
 
-# ── Config ────────────────────────────────────────────────────────────────────
-API_BASE_URL     = os.getenv("API_BASE_URL", "https://router.huggingface.co/v1")
-MODEL_NAME       = os.getenv("MODEL_NAME", "Qwen/Qwen2.5-72B-Instruct")
-HF_TOKEN         = os.getenv("HF_TOKEN")
-BENCHMARK        = "openenv-fraud"
-MAX_STEPS        = 50
+BENCHMARK               = "openenv-fraud"
+MAX_STEPS               = 50
 SUCCESS_SCORE_THRESHOLD = 0.5
 
 # ── Prompts ───────────────────────────────────────────────────────────────────
@@ -193,10 +179,11 @@ def run_simulation(client: OpenAI, env: FraudEnv, policy: Optional[FraudPolicy],
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def main() -> None:
-    # 🔗 LITELLM PROXY CONNECTION
+    # Initialized using guidelines-compliant variables
+    # Validator overrides API_BASE_URL with its proxy at runtime
     client = OpenAI(
-        base_url=os.environ["API_BASE_URL"],
-        api_key=os.environ["API_KEY"],
+        base_url=API_BASE_URL,
+        api_key=HF_TOKEN,
     )
 
     env_url = os.getenv("ENV_BASE_URL", "http://localhost:8000")
@@ -206,7 +193,6 @@ def main() -> None:
     policy = None
     if TORCH_AVAILABLE:
         try:
-            # Get dimensions
             sample_res = env.reset(task="medium")
             sample_obs = sample_res.observation if hasattr(sample_res, "observation") else sample_res
             input_dim = extract_features(sample_obs).shape[-1]
@@ -220,7 +206,7 @@ def main() -> None:
             print(f"[DEBUG] Policy failed: {e}", flush=True)
             policy = None
 
-    # 🏁 RUN ALL THREE TASKS REQUIRED BY VALIDATOR
+    # Run all three tasks required by validator
     for target_task in ["easy", "medium", "hard"]:
         try:
             run_simulation(client, env, policy, target_task)

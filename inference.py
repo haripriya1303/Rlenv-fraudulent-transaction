@@ -23,10 +23,9 @@ except ImportError:
 
 # ── Config ────────────────────────────────────────────────────────────────────
 # These must be set in the environment by the validator.
-API_BASE_URL = os.environ.get("API_BASE_URL")
-API_KEY      = os.environ.get("API_KEY")
-MODEL_NAME   = os.environ.get("MODEL_NAME", "Qwen/Qwen2.5-72B-Instruct")
-HF_TOKEN     = os.environ.get("HF_TOKEN")
+API_BASE_URL = os.getenv("API_BASE_URL", "https://router.huggingface.co/v1")
+MODEL_NAME   = os.getenv("MODEL_NAME", "Qwen/Qwen2.5-72B-Instruct")
+HF_TOKEN     = os.getenv("HF_TOKEN")
 
 BENCHMARK               = "openenv-fraud"
 MAX_STEPS               = 50
@@ -177,9 +176,9 @@ def run_simulation(client: OpenAI, env: FraudEnv, policy: Optional[FraudPolicy],
 def main() -> None:
     # Validator injects API_BASE_URL and API_KEY at runtime
     client = OpenAI(
-        base_url=os.environ["API_BASE_URL"],
-        api_key=os.environ["API_KEY"],
-    )
+    base_url=API_BASE_URL,
+    api_key=HF_TOKEN,
+)
 
     env_url = os.getenv("ENV_BASE_URL", "http://localhost:8000")
     env = FraudEnv(base_url=env_url)

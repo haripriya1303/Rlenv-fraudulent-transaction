@@ -6,9 +6,6 @@ import math
 import argparse
 import json
 from openai import OpenAI
-from dotenv import load_dotenv
-
-load_dotenv()
 from typing import List, Any
 print(">>> DEBUG: SCRIPT START")
 
@@ -22,10 +19,10 @@ GAMMA = 0.99
 CLIP_GRAD = 1.0      
 ENV_URL = os.getenv("ENV_BASE_URL", "http://localhost:8000")
 
-# OpenAI Setup for Training
-API_BASE_URL = os.getenv("API_BASE_URL", "https://router.huggingface.co/v1")
-API_KEY = os.getenv("API_KEY") or os.getenv("HF_TOKEN") or "dummy_token"
-MODEL_NAME = os.getenv("MODEL_NAME", "Qwen/Qwen2.5-72B-Instruct")
+# OpenAI Setup for Training (Using injected variables)
+API_BASE_URL = os.environ["API_BASE_URL"]
+API_KEY = os.environ["API_KEY"]
+MODEL_NAME = os.environ.get("MODEL_NAME", "Qwen/Qwen2.5-72B-Instruct")
 
 def get_llm_signal(client: OpenAI, obs: Any) -> str:
     """Gets the LLM's classification signal as a feature."""

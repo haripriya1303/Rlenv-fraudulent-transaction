@@ -273,7 +273,3 @@ Runs within hackathon constraints (2 vCPU, 8 GB RAM):
 
 ---
 
-## 🤝 Spec Links
-
-- HF Space: [harihari1906/Rlenv-fraudulent-transaction-blocker](https://huggingface.co/spaces/harihari1906/Rlenv-fraudulent-transaction-blocker)
-- GitHub: [haripriya1303/Rlenv-fraudulent-transaction](https://github.com/haripriya1303/Rlenv-fraudulent-transaction)

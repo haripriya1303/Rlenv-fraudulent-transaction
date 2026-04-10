@@ -8,9 +8,6 @@ import requests
 import time
 from typing import Optional, Dict, Any, List
 from dataclasses import dataclass, field
-from dotenv import load_dotenv
-
-load_dotenv()
 from models import FraudAction, FraudObservation, FraudState
 
 @dataclass

@@ -22,10 +22,11 @@ except ImportError:
     TORCH_AVAILABLE = False
 
 # ── Config ────────────────────────────────────────────────────────────────────
-# Defaults required by guidelines. Validator overrides API_BASE_URL at runtime.
-API_BASE_URL = os.getenv("API_BASE_URL", "https://api.openai.com/v1")
-MODEL_NAME   = os.getenv("MODEL_NAME", "Qwen/Qwen2.5-72B-Instruct")
-HF_TOKEN     = os.getenv("HF_TOKEN")  # used by FraudEnv client for HF Space auth
+# These must be set in the environment by the validator.
+API_BASE_URL = os.environ.get("API_BASE_URL")
+API_KEY      = os.environ.get("API_KEY")
+MODEL_NAME   = os.environ.get("MODEL_NAME", "Qwen/Qwen2.5-72B-Instruct")
+HF_TOKEN     = os.environ.get("HF_TOKEN")
 
 BENCHMARK               = "openenv-fraud"
 MAX_STEPS               = 50

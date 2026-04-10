@@ -19,15 +19,11 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import numpy as np
-from dotenv import load_dotenv
 from openai import OpenAI
 from rich.console import Console
 from rich.panel import Panel
 from rich.progress import Progress, SpinnerColumn, TextColumn
 from rich.table import Table
-
-# Load environment variables
-load_dotenv()
 
 # Add project root to path for direct execution
 sys.path.insert(0, str(Path(__file__).parent))
@@ -106,13 +102,10 @@ class FraudBaselineAgent:
         temperature: float = 0.0,
         max_retries: int = 3,
     ):
-        api_key = os.environ.get("API_KEY") or os.environ.get("HF_TOKEN") or os.environ.get("OPENAI_API_KEY")
-        base_url = os.environ.get("API_BASE_URL", "https://router.huggingface.co/v1")
+        api_key = os.environ["API_KEY"]
+        base_url = os.environ["API_BASE_URL"]
         if not api_key:
-            raise EnvironmentError(
-                "API Key is not set. "
-                "Export it or add it to a .env file: API_KEY=..., HF_TOKEN=..., or OPENAI_API_KEY=..."
-            )
+            raise EnvironmentError("API_KEY environment variable is required")
 
         self.client = OpenAI(api_key=api_key, base_url=base_url)
         self.model = model

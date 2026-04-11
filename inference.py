@@ -75,14 +75,16 @@ def log_start(task: str, env: str, model: str) -> None:
     print(f"[START] task={task} env={env} model={model}", flush=True)
 
 def log_step(step: int, action: str, reward: float, done: bool, error: Optional[str]) -> None:
-    reported_reward = min(max(float(reward), 0.0), 1.0)
+    # ⚖️ STRICT VALIDATOR RULE: Individual rewards must be in (0, 1)
+    reported_reward = min(max(float(reward), 0.01), 0.99)
     done_val = str(bool(done)).lower()
     error_val = str(error) if (error and str(error).strip() not in ("None", "")) else "null"
     print(f"[STEP] step={step} action={action} reward={reported_reward:.2f} done={done_val} error={error_val}", flush=True)
 
 def log_end(success: bool, steps: int, score: float, rewards: List[float]) -> None:
-    score = min(max(float(score), 0.0), 1.0)
-    rewards_str = ",".join(f"{min(max(r, 0.0), 1.0):.2f}" for r in rewards)
+    # ⚖️ STRICT VALIDATOR RULE: Final score must be in (0, 1)
+    score = min(max(float(score), 0.01), 0.99)
+    rewards_str = ",".join(f"{min(max(r, 0.01), 0.99):.2f}" for r in rewards)
     print(f"[END] success={str(bool(success)).lower()} steps={steps} score={score:.3f} rewards={rewards_str}", flush=True)
 
 # ── Action selection ──────────────────────────────────────────────────────────
@@ -176,6 +178,8 @@ def run_simulation(client: OpenAI, env: FraudEnv, policy: Optional[FraudPolicy],
         steps_taken = len(rewards)
         score = 0.0
     finally:
+        # ⚖️ STRICT VALIDATOR RULE: Score must be in (0, 1), not 0.0 or 1.0
+        score = min(max(score, 0.01), 0.99)
         log_end(success=success, steps=steps_taken, score=score, rewards=rewards)
 
 # ── Main ──────────────────────────────────────────────────────────────────────

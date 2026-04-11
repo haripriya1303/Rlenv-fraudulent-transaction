@@ -234,4 +234,13 @@ def grade_episode(
     grader = GRADER_REGISTRY.get(difficulty)
     if grader is None:
         raise ValueError(f"Unknown difficulty: {difficulty}")
-    return grader.grade(steps)
+    
+    result = grader.grade(steps)
+    
+    # ⚖️ STRICT VALIDATOR RULE: Score must be in (0, 1), not 0.0 or 1.0
+    # Ensuring every reported score is strictly between 0.01 and 0.99
+    raw_score = result.get("score", 0.0)
+    nudged_score = round(min(max(raw_score, 0.01), 0.99), 4)
+    result["score"] = nudged_score
+    
+    return result
